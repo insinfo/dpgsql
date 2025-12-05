@@ -1,3 +1,5 @@
+import 'npgsql_batch.dart';
+import 'npgsql_binary_exporter.dart';
 import 'npgsql_binary_importer.dart';
 import 'npgsql_command.dart';
 import 'npgsql_data_reader.dart';
@@ -94,11 +96,18 @@ class NpgsqlConnection {
   }
 
   Future<NpgsqlDataReader> executeReader(String commandText,
-      {NpgsqlParameterCollection? parameters}) async {
+      {NpgsqlParameterCollection? parameters, String? statementName}) async {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.executeReader(commandText, parameters: parameters);
+    return _connector!.executeReader(commandText,
+        parameters: parameters, statementName: statementName);
+  }
+
+  Future<void> prepare(String commandText, String statementName,
+      NpgsqlParameterCollection parameters) async {
+    if (_connector == null) throw StateError('Connection closed');
+    await _connector!.prepare(commandText, statementName, parameters);
   }
 
   /// Starts a binary COPY FROM STDIN operation.
@@ -107,6 +116,26 @@ class NpgsqlConnection {
     final importer = NpgsqlBinaryImporter(_connector!, copyFromCommand);
     await importer.init();
     return importer;
+  }
+
+  /// Starts a binary COPY TO STDOUT operation.
+  Future<NpgsqlBinaryExporter> beginBinaryExport(String copyToCommand) async {
+    if (_connector == null) throw StateError('Connection closed');
+    final exporter = NpgsqlBinaryExporter(_connector!, copyToCommand);
+    await exporter.init();
+    return exporter;
+  }
+
+  NpgsqlBatch createBatch() {
+    return NpgsqlBatch(this);
+  }
+
+  Future<NpgsqlDataReader> executeBatch(NpgsqlBatch batch) {
+    if (_state != ConnectionState.open) {
+      throw StateError('Connection is not open');
+    }
+    // We need to implement executeBatch in NpgsqlConnector
+    return _connector!.executeBatch(batch);
   }
 
   // TODO: Move to a proper ConnectionStringBuilder/Parser class

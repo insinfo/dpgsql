@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:io';
 
 import 'package:dpgsql/dpgsql.dart';
@@ -31,16 +30,6 @@ void main() {
 
           // BindComplete
           final bindComplete = [0x32, 0, 0, 0, 4];
-
-          // RowDescription (from Describe 'D')
-          // We expect Describe Portal message next, but usually pipelined.
-          // However, if we receive P, B, D, E, S in one chunk or separate...
-          // Let's just send everything on first 'P' seen if pipelined, or wait?
-          // The connector sends await writeParse, writeBind... sequentially but without waiting?
-          // No, writeParse etc on FrontendMessages just writes to buffer.
-          // But flush happens typically when buffer full or explicitly?
-          // FrontendMessages implementation writes directly?
-          // Let's check FrontendMessages implementation later. Assuming they are flushed.
 
           // RowDescription
           final rowDesc = [

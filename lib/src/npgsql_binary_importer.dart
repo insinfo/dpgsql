@@ -1,7 +1,7 @@
 import 'dart:typed_data';
-import 'dart:convert';
 import 'internal/npgsql_connector.dart';
-import 'types/type_handler.dart';
+import 'postgres_exception.dart';
+import 'protocol/backend_messages.dart';
 
 /// Provides an API for engaging in a binary COPY operation.
 /// Porting NpgsqlBinaryImporter.cs
@@ -17,8 +17,14 @@ class NpgsqlBinaryImporter {
 
   Future<void> init() async {
     // 1. Send COPY command
-    await _connector.executeCopyCommand(_copyCommand);
-    // 2. We assume CopyInResponse is handled by connector and we are strictly in Copy mode now
+    final msg = await _connector.executeCopyCommand(_copyCommand);
+    if (msg.kind != CopyResponseKind.copyIn) {
+      throw PostgresException(
+          severity: 'ERROR',
+          invariantSeverity: 'ERROR',
+          sqlState: '0A000',
+          messageText: 'Unexpected CopyResponseKind for Importer: ${msg.kind}');
+    }
     // 3. Write Header
     // PGCOPY\n\377\r\n\0 + Flags(0) + Ext(0)
     final header = ByteData(19);

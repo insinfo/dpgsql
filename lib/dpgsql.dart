@@ -13,4 +13,7 @@ export 'src/npgsql_parameter.dart';
 export 'src/npgsql_parameter_collection.dart';
 export 'src/npgsql_data_source.dart';
 export 'src/npgsql_transaction.dart';
+export 'src/npgsql_batch.dart';
+export 'src/npgsql_batch_command.dart';
+export 'src/npgsql_binary_exporter.dart';
 export 'src/npgsql_binary_importer.dart';

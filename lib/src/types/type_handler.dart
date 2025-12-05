@@ -330,4 +330,14 @@ class TypeHandlerRegistry {
 
     return null;
   }
+
+  TypeHandler<T>? resolveByDartType<T>() {
+    if (T == int) return _oidHandlers[Oid.int4] as TypeHandler<T>?;
+    if (T == String) return _oidHandlers[Oid.text] as TypeHandler<T>?;
+    if (T == bool) return _oidHandlers[Oid.bool] as TypeHandler<T>?;
+    if (T == double) return _oidHandlers[Oid.float8] as TypeHandler<T>?;
+    if (T == DateTime) return _oidHandlers[Oid.timestamp] as TypeHandler<T>?;
+    if (T == Uint8List) return _oidHandlers[Oid.bytea] as TypeHandler<T>?;
+    return null;
+  }
 }

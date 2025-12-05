@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
 import '../npgsql_data_reader.dart';
 import '../postgres_exception.dart';
@@ -179,11 +179,59 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
   }
 
   @override
-  Future<bool> read() async {
-    if (_closed) return false;
+  Future<bool> nextResult() async {
+    if (_drained) return false;
+
+    // If we haven't finished the current result, drain it
+    if (!_currentResultFinished) {
+      while (await read()) {}
+    }
+
+    _currentResultFinished = false;
+    _rowDescription = null;
+    _currentRow = null;
+    _columnMap = null;
+    _recordsAffected = 0;
+    _closed = false;
 
     while (true) {
       final msg = await _connector.readMessage();
+
+      if (msg is ReadyForQueryMessage) {
+        _drained = true;
+        _closed = true;
+        return false;
+      }
+
+      if (msg is RowDescriptionMessage) {
+        _rowDescription = msg;
+        return true;
+      }
+
+      if (msg is CommandCompleteMessage) {
+        _handleCommandComplete(msg);
+        // Result without rows
+        _currentResultFinished = true; // No rows to read
+        return true;
+      }
+
+      if (msg is ErrorResponseMessage) {
+        _handleError(msg);
+      }
+
+      // Ignore BindComplete, ParseComplete, etc.
+    }
+  }
+
+  bool _currentResultFinished = false;
+
+  @override
+  Future<bool> read() async {
+    if (_closed || _currentResultFinished) return false;
+
+    while (true) {
+      final msg = await _connector.readMessage();
+      // print('DEBUG: Reader received ${msg.runtimeType}');
 
       if (msg is DataRowMessage) {
         _currentRow = msg;
@@ -191,6 +239,9 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
       }
 
       if (msg is RowDescriptionMessage) {
+        // Should not happen inside a result set usually, unless interleaved?
+        // Treat as start of new result? No, read() is for current result.
+        // This might be a bug in state tracking if we get here.
         _rowDescription = msg;
         _columnMap = null;
         continue;
@@ -199,12 +250,14 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
       if (msg is CommandCompleteMessage) {
         _handleCommandComplete(msg);
         _currentRow = null;
+        _currentResultFinished = true;
         return false;
       }
 
       if (msg is ReadyForQueryMessage) {
         _closed = true;
         _drained = true;
+        _currentResultFinished = true;
         return false;
       }
 

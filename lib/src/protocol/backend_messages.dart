@@ -182,8 +182,7 @@ class BackendMessageReader {
   }
 
   AuthenticationRequestMessage _parseAuthentication(MemoryBinaryInput input) {
-    final type =
-        AuthenticationRequestType.fromCode(input.readInt32());
+    final type = AuthenticationRequestType.fromCode(input.readInt32());
     switch (type) {
       case AuthenticationRequestType.ok:
         return AuthenticationOkMessage.instance;
@@ -233,16 +232,32 @@ class BackendMessageReader {
 
   RowDescriptionMessage _parseRowDescription(MemoryBinaryInput input) {
     final fieldCount = input.readInt16();
+    // print('DEBUG: FieldCount: $fieldCount');
     final fields = <FieldDescription>[];
     for (var i = 0; i < fieldCount; i++) {
+      final name = _readCString(input);
+      // print('DEBUG: Name: $name');
+      final tableOID = input.readInt32();
+      // print('DEBUG: TableOID: $tableOID');
+      final attrNum = input.readInt16();
+      // print('DEBUG: AttrNum: $attrNum');
+      final oid = input.readInt32();
+      // print('DEBUG: OID: $oid');
+      final typeSize = input.readInt16();
+      // print('DEBUG: TypeSize: $typeSize');
+      final typeMod = input.readInt32();
+      // print('DEBUG: TypeMod: $typeMod');
+      final formatCode = input.readInt16();
+      // print('DEBUG: FormatCode: $formatCode');
+
       fields.add(FieldDescription(
-        name: _readCString(input),
-        tableOID: input.readInt32(),
-        columnAttributeNumber: input.readInt16(),
-        oid: input.readInt32(),
-        typeSize: input.readInt16(),
-        typeModifier: input.readInt32(),
-        format: DataFormat.fromCode(input.readInt16()),
+        name: name,
+        tableOID: tableOID,
+        columnAttributeNumber: attrNum,
+        oid: oid,
+        typeSize: typeSize,
+        typeModifier: typeMod,
+        format: DataFormat.fromCode(formatCode),
       ));
     }
     return RowDescriptionMessage(fields);

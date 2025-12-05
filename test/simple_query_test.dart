@@ -1,6 +1,4 @@
-import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
@@ -13,7 +11,7 @@ void main() {
     server.listen((client) {
       client.listen((chunk) {
         // Just mocking responses blindly based on expected flow
-        final str = String.fromCharCodes(chunk);
+        // final str = String.fromCharCodes(chunk);
 
         // Handshake
         if (chunk.length > 8 && chunk[0] == 0) {

@@ -1,9 +1,7 @@
-import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dpgsql/dpgsql.dart';
-import 'package:dpgsql/src/protocol/backend_messages.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -64,16 +62,6 @@ void main() {
         if (chunk.isNotEmpty) {
           // Send ErrorResponse
           // 'E' + length + Fields + 0
-          // Field: 'S' + "ERROR" + 0
-          // Field: 'C' + "28P01" + 0 (Invalid Password)
-          // Field: 'M' + "Auth failed" + 0
-          // 0 (End of fields)
-
-          final out =
-              MemoryBinaryOutput(); // Helper I wrote? No, exposed in dpgsql via export
-          // Using raw bytes construction for simplicity or if BinaryOutput is not handy in test scope the way I want
-          // Let's manually construct bytes
-
           final S = [0x53] + 'ERROR'.codeUnits + [0];
           final C = [0x43] + '28P01'.codeUnits + [0];
           final M = [0x4D] + 'Auth failed'.codeUnits + [0];

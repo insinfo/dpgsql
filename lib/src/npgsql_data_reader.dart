@@ -18,6 +18,9 @@ abstract class NpgsqlDataReader {
   /// Gets the column ordinal, given the name of the column.
   int getOrdinal(String name);
 
+  /// Advances the data reader to the next result, when reading the results of batch SQL statements.
+  Future<bool> nextResult();
+
   /// Closes the NpgsqlDataReader object.
   Future<void> close();
 }
