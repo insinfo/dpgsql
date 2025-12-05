@@ -25,18 +25,16 @@ abstract class BinaryInput {
 /// sem copiar todo o conteúdo a cada leitura.
 class SocketBinaryInput implements BinaryInput {
   SocketBinaryInput(
-    this._socket, {
+    Stream<List<int>> stream, {
     int initialCapacity = 4096,
   }) : _buffer = Uint8List(initialCapacity) {
-    _socket.listen(
+    stream.listen(
       _onData,
       onDone: _onDone,
       onError: _onError,
       cancelOnError: true,
     );
   }
-
-  final Socket _socket;
 
   Uint8List _buffer;
   int _readOffset = 0;
@@ -71,7 +69,8 @@ class SocketBinaryInput implements BinaryInput {
 
   Future<void> _checkForError() async {
     if (_error != null) {
-      Error.throwWithStackTrace(_error!, _errorStackTrace ?? StackTrace.current);
+      Error.throwWithStackTrace(
+          _error!, _errorStackTrace ?? StackTrace.current);
     }
   }
 
@@ -110,10 +109,12 @@ class SocketBinaryInput implements BinaryInput {
       throw ArgumentError.value(length, 'length', 'Deve ser >= 0');
     }
     if (_available < length) {
-      throw StateError('Buffer interno menor que o esperado: $_available < $length');
+      throw StateError(
+          'Buffer interno menor que o esperado: $_available < $length');
     }
 
-    final view = Uint8List.sublistView(_buffer, _readOffset, _readOffset + length);
+    final view =
+        Uint8List.sublistView(_buffer, _readOffset, _readOffset + length);
     _readOffset += length;
 
     // Se consumiu tudo, reseta os ponteiros para liberar espaço.

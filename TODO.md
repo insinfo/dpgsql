@@ -72,12 +72,6 @@ Progresso 2025-12-05 (Parte 9):
 - **Sincronização de Protocolo**: Ajustado `awaitCopyComplete` para consumir `ReadyForQuery`, corrigindo bug de sincronia em Simple Query mode.
 - **Teste Real COPY**: `test/real_copy_test.dart` criado e passando com sucesso (Insert via COPY + Select verification).
 
-Próximos Passos:
-- Implementar `beginBinaryExport` (COPY TO STDOUT).
-- Implementar Mock real para SCRAM-SHA-256 para validar autenticação no teste (sem depender de servidor real se possível).
-- Refinar robustez de ArrayHandler (multidimensional, nulls) e Text Parsing para Arrays.
-- Implementar `Prepare()` para usar Extended Query Protocol explicitamente.
-
 Progresso 2025-12-05 (Parte 10):
 - **Refinamento de COPY**:
     - Corrigidos erros de compilação em `NpgsqlBinaryImporter` e `NpgsqlBinaryExporter` (imports, tipos).
@@ -85,41 +79,12 @@ Progresso 2025-12-05 (Parte 10):
     - `NpgsqlBinaryExporter` refatorado para usar `TypeHandler` na leitura (`read<T>`), suportando nativamente `int`, `String`, `bool`, `double`, `DateTime`, `Uint8List`.
     - Leitura e análise do `roteiro_performace.md`, confirmando foco em Extended Protocol e Pipeline como próximos grandes passos.
 
-Próximos Passos:
-- Criar teste de integração para `beginBinaryExport` (COPY TO STDOUT).
-- Implementar Mock real para SCRAM-SHA-256.
-- Refinar ArrayHandler (multidimensional, nulls).
-- Implementar `Prepare()` e iniciar suporte a Pipeline Mode.
-
 Progresso 2025-12-05 (Parte 11):
 - **COPY Export Finalizado**:
     - Criado teste de integração `test/real_copy_export_test.dart` validando `COPY TO STDOUT` com tipos `int`, `text`, `float8` e `NULL`.
     - Corrigido bug crítico em `NpgsqlBinaryExporter` onde inteiros lidos do stream não eram tratados como signed (causando falha em `ensureBytes` com valores negativos/grandes).
     - Limpeza de código e imports em `NpgsqlBinaryExporter`, `NpgsqlBinaryImporter` e `NpgsqlDataReaderImpl`.
     - `dart analyze lib` limpo (sem erros/warnings).
-
-- [x] **Progresso Part 11**:
-    - [x] Implement SCRAM-SHA-256 Mock Server for testing.
-    - [x] Fix all lints in test files.
-    - [x] Implement `NpgsqlBatch` and `NpgsqlBatchCommand`.
-    - [x] Implement `executeBatch` in `NpgsqlConnection` and `NpgsqlConnector` (Pipeline Mode).
-    - [x] Verify Pipeline Mode with `test/batch_test.dart`.
-
-## Next Steps
-- [ ] **Refine ArrayHandler**:
-    - [ ] Support multidimensional arrays (currently only 1D).
-    - [ ] Support null values in arrays.
-    - [ ] Improve text parsing for complex arrays.
-- [ ] **Implement `NpgsqlTransaction`**:
-    - [ ] Ensure `Save()` and `Rollback()` work correctly.
-- [ ] **Connection Pooling**:
-    - [ ] Implement `NpgsqlDataSource` for pooling.
-- [ ] **SSL/TLS Support**:
-    - [ ] Implement `SslMode` handling.
-    - Implementado fluxo de `Parse` + `Describe Statement` + `Sync` no `prepare`.
-    - Atualizado `executeReader` para usar `Bind` com `statementName` quando preparado, pulando o `Parse`.
-    - Criado teste de integração `test/prepare_test.dart` validando reutilização de statement preparado com diferentes parâmetros.
-    - **Nota**: O suporte a `@param` ainda não existe (requer reescrita de SQL), testes usam `$1`.
 
 Progresso 2025-12-05 (Parte 12):
 - **Prepare() Implementado**:
@@ -129,12 +94,6 @@ Progresso 2025-12-05 (Parte 12):
     - Criado teste de integração `test/prepare_test.dart` validando reutilização de statement preparado com diferentes parâmetros.
     - **Nota**: O suporte a `@param` ainda não existe (requer reescrita de SQL), testes usam `$1`.
 
-Próximos Passos:
-- Implementar Mock real para SCRAM-SHA-256.
-- Refinar ArrayHandler.
-- Iniciar Pipeline Mode.
-- Implementar reescrita de SQL para suportar `@param`.
-
 Progresso 2025-12-05 (Parte 13):
 - **SQL Rewriting Implementado**:
     - Criada classe `SqlRewriter` em `lib/src/internal/sql_rewriter.dart` para converter parâmetros nomeados (`@param`) para posicionais (`$1`, `$2`).
@@ -142,7 +101,29 @@ Progresso 2025-12-05 (Parte 13):
     - Atualizado `test/prepare_test.dart` para usar `@id`, validando a reescrita automática e o mapeamento de parâmetros.
     - Suporte a Prepared Statements agora é completo e amigável (estilo Npgsql).
 
-Próximos Passos:
-- Implementar Mock real para SCRAM-SHA-256.
-- Refinar ArrayHandler.
-- Iniciar Pipeline Mode.
+Progresso 2025-12-05 (Parte 14):
+- **SSL/TLS Support**:
+    - Implementado `SslMode` (Disable, Prefer, Require, Allow) e handshake SSL em `NpgsqlConnector`.
+    - Suporte a upgrade para `SecureSocket`.
+    - Teste de handshake SSL (`test/ssl_test.dart`) cobrindo cenários de fallback e erro.
+- **Text Parsing**:
+    - Atualizado `TypeHandler` para suportar leitura de formato texto (`isText: true`).
+    - Atualizado `NpgsqlDataReaderImpl` para usar handlers com flag `isText` quando o formato da coluna é texto (Simple Query Protocol).
+    - Implementado parsing de texto para tipos básicos (`int`, `double`, `bool`, `DateTime`).
+- **Novos Tipos**:
+    - **JSON/JSONB**: Implementados `JsonHandler` e `JsonbHandler` (leitura/escrita UTF8 e versão binary JSONB).
+    - **Geometric Types**: Implementados `Point`, `Box`, `Line`, `LSeg`, `Path`, `Polygon`, `Circle` e seus handlers.
+    - **Range Types**: Implementado `NpgsqlRange<T>` e `RangeHandler<T>` genérico. Suporte a `int4range`, `int8range`, `numrange`, `tsrange`, `tstzrange`, `daterange`.
+    - Criado `test/types_test.dart` validando serialização/deserialização desses novos tipos.
+
+## Next Steps
+1.  **Authentication Mechanisms**:
+    -   Implement SCRAM-SHA-256 verification (server signature).
+    -   Implement GSSAPI/Kerberos (Low priority).
+2.  **Pipeline Mode**:
+    -   Implement explicit pipeline mode API (`NpgsqlDataSource.createBatch` is implicit pipeline, but explicit `EnterPipelineMode` might be needed for advanced usage).
+3.  **Replication**:
+    -   Implement Logical Replication Protocol (Low priority).
+4.  **Performance Tuning**:
+    -   Benchmark against other drivers.
+    -   Optimize buffer usage.

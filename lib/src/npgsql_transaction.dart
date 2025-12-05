@@ -28,6 +28,28 @@ class NpgsqlTransaction {
     _isCompleted = true;
   }
 
+  /// Creates a savepoint in the transaction.
+  Future<void> save(String name) async {
+    _checkCompleted();
+    final reader = await _connection.executeReader('SAVEPOINT $name');
+    await reader.close();
+  }
+
+  /// Rolls back a transaction from a pending state to the savepoint with the given name.
+  Future<void> rollbackTo(String name) async {
+    _checkCompleted();
+    final reader =
+        await _connection.executeReader('ROLLBACK TO SAVEPOINT $name');
+    await reader.close();
+  }
+
+  /// Releases a savepoint with the given name.
+  Future<void> release(String name) async {
+    _checkCompleted();
+    final reader = await _connection.executeReader('RELEASE SAVEPOINT $name');
+    await reader.close();
+  }
+
   void _checkCompleted() {
     if (_isCompleted) {
       throw StateError(

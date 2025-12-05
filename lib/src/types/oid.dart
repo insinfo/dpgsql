@@ -55,6 +55,14 @@ abstract class Oid {
   static const int uuid = 2950;
   static const int jsonb = 3802;
 
+  // Range Types
+  static const int int4range = 3904;
+  static const int numrange = 3906;
+  static const int tsrange = 3908;
+  static const int tstzrange = 3910;
+  static const int daterange = 3912;
+  static const int int8range = 3926;
+
   // Arrays
   static const int boolArray = 1000;
   static const int byteaArray = 1001;

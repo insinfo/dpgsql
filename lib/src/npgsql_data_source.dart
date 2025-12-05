@@ -1,70 +1,63 @@
 import 'dart:async';
 import 'dart:collection';
 
+import 'ssl_mode.dart';
 import 'npgsql_connection.dart';
 import 'internal/npgsql_connector.dart';
 
-/// Represents a source of NpgsqlConnections.
-/// Porting NpgsqlDataSource.cs
+/// Represents a source of data for Npgsql, which can be used to create connections.
+/// Typically handles connection pooling.
 class NpgsqlDataSource {
   NpgsqlDataSource(this.connectionString);
 
   final String connectionString;
   final Queue<NpgsqlConnector> _idleConnectors = Queue<NpgsqlConnector>();
-  final List<NpgsqlConnector> _busyConnectors = [];
 
-  // Basic locking not needed in Dart due to single-threaded event loop?
-  // But we have async gaps.
-  // Actually we need to be careful not to checkout same connector twice.
-  // Queue.removeFirst is synchronous.
+  // TODO: Max pool size, Min pool size, Timeout
 
+  /// Opens a new connection to the database.
   Future<NpgsqlConnection> openConnection() async {
     NpgsqlConnector? connector;
 
     while (_idleConnectors.isNotEmpty) {
-      final c = _idleConnectors.removeFirst();
-      if (c.isConnected) {
-        connector = c;
+      connector = _idleConnectors.removeLast();
+      if (connector.isConnected) {
+        // TODO: Validate connection (e.g. SELECT 1 or check state)
         break;
+      } else {
+        // Prune disconnected
+        connector = null;
       }
-      // If not connected, discard it.
-      // Ideally we would ensure it is closed regardless.
-      try {
-        await c.close();
-      } catch (_) {}
     }
 
-    // If not found in pool or pool empty
     if (connector == null) {
-      final map = _parseConnectionString(connectionString);
-      connector = NpgsqlConnector(
-        host: map['Host'] ?? 'localhost',
-        port: int.parse(map['Port'] ?? '5432'),
-        username: map['Username'] ?? map['User ID'] ?? 'postgres',
-        password: map['Password'] ?? '',
-        database: map['Database'] ?? 'postgres',
-      );
+      connector = _createConnector();
       await connector.open();
     }
 
-    _busyConnectors.add(connector);
-
-    // Create Connection wrapping this connector
-    // We need internal API on NpgsqlConnection to accept an existing connector
-    // and a callback to return it to pool on close.
-    // Since NpgsqlConnection._connector is private and there is no constructor for it, we might need to modify NpgsqlConnection.
     return NpgsqlConnection.fromConnector(connector, _returnConnector);
   }
 
   void _returnConnector(NpgsqlConnector connector) {
-    _busyConnectors.remove(connector);
-    _idleConnectors.add(connector);
-    // Reset state?
-    // Rollback transaction if open?
-    // For now simple return.
+    if (connector.isConnected) {
+      // Reset state? (Rollback transaction if any, close portals)
+      // For now, just add back.
+      _idleConnectors.add(connector);
+    }
   }
 
-  // TODO: Deduplicate this parser
+  NpgsqlConnector _createConnector() {
+    final settings = _parseConnectionString(connectionString);
+    return NpgsqlConnector(
+      host: settings['Host'] ?? 'localhost',
+      port: int.parse(settings['Port'] ?? '5432'),
+      username: settings['Username'] ?? settings['User ID'] ?? 'postgres',
+      password: settings['Password'] ?? '',
+      database: settings['Database'] ?? 'postgres',
+      sslMode: _parseSslMode(settings['SSL Mode'] ?? settings['SslMode']),
+    );
+  }
+
   Map<String, String> _parseConnectionString(String connString) {
     final map = <String, String>{};
     final parts = connString.split(';');
@@ -77,5 +70,28 @@ class NpgsqlDataSource {
       }
     }
     return map;
+  }
+
+  SslMode _parseSslMode(String? value) {
+    if (value == null) return SslMode.disable;
+    switch (value.toLowerCase()) {
+      case 'disable':
+        return SslMode.disable;
+      case 'allow':
+        return SslMode.allow;
+      case 'prefer':
+        return SslMode.prefer;
+      case 'require':
+        return SslMode.require;
+      default:
+        return SslMode.disable;
+    }
+  }
+
+  Future<void> dispose() async {
+    for (final c in _idleConnectors) {
+      await c.close();
+    }
+    _idleConnectors.clear();
   }
 }

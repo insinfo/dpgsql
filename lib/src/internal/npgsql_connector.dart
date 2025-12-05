@@ -18,6 +18,7 @@ import '../npgsql_batch.dart';
 import 'npgsql_data_reader_impl.dart';
 import 'scram_authenticator.dart';
 import 'sql_rewriter.dart';
+import '../ssl_mode.dart';
 
 /// Represents a connection to a PostgreSQL backend.
 /// Porting NpgsqlConnector.cs
@@ -28,7 +29,7 @@ class NpgsqlConnector {
     this.username = 'postgres',
     this.password = '',
     this.database = 'postgres',
-    this.sslMode = 'Disable', // TODO: Enum SslMode
+    this.sslMode = SslMode.disable,
   });
 
   final String host;
@@ -36,7 +37,7 @@ class NpgsqlConnector {
   final String username;
   final String password;
   final String database;
-  final String sslMode;
+  final SslMode sslMode;
 
   Socket? _socket;
   SocketBinaryInput? _readBuffer;
@@ -68,8 +69,72 @@ class NpgsqlConnector {
       _socket = await Socket.connect(host, port);
       _socket!.setOption(SocketOption.tcpNoDelay, true);
 
+      Stream<List<int>> inputStream = _socket!;
+
+      // SSL Handshake
+      if (sslMode != SslMode.disable) {
+        // Use broadcast stream to allow peeking/reading handshake response
+        final broadcast = _socket!.asBroadcastStream();
+        inputStream = broadcast;
+
+        // Send SSLRequest
+        final sslReq = ByteData(8);
+        sslReq.setInt32(0, 8);
+        sslReq.setInt32(4, 80877103);
+        _socket!.add(sslReq.buffer.asUint8List());
+
+        // Read response byte
+        final completer = Completer<int>();
+        final sub = broadcast.listen(
+          (data) {
+            if (data.isNotEmpty) {
+              completer.complete(data[0]);
+            }
+          },
+          onError: completer.completeError,
+          onDone: () => completer.completeError(
+              Exception('Connection closed during SSL handshake')),
+        );
+
+        final response = await completer.future;
+        await sub.cancel(); // Stop listening so we can switch or continue
+
+        if (response == 83) {
+          // 'S'
+          // Upgrade to SSL
+          _socket = await SecureSocket.secure(
+            _socket!,
+            onBadCertificate: (cert) {
+              // TODO: Implement verification based on SslMode (VerifyCA, VerifyFull)
+              return true; // Trust all for now
+            },
+          );
+          // Update inputStream to the new SecureSocket
+          inputStream = _socket!;
+        } else if (response == 78) {
+          // 'N'
+          if (sslMode == SslMode.require) {
+            throw PostgresException(
+              severity: 'FATAL',
+              invariantSeverity: 'FATAL',
+              sqlState: '08000',
+              messageText: 'The server does not support SSL.',
+            );
+          }
+          // Proceed with cleartext using the broadcast stream
+        } else {
+          throw PostgresException(
+            severity: 'FATAL',
+            invariantSeverity: 'FATAL',
+            sqlState: '08000',
+            messageText:
+                'Received invalid SSL response from server: ${String.fromCharCode(response)}',
+          );
+        }
+      }
+
       // 2. Initialize Buffers
-      _readBuffer = SocketBinaryInput(_socket!);
+      _readBuffer = SocketBinaryInput(inputStream);
       _writeBuffer = SocketBinaryOutput(_socket!);
 
       // Readers/Writers helpers

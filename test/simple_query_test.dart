@@ -81,8 +81,8 @@ void main() {
 
     expect(reader.fieldCount, 1);
     expect(await reader.read(), isTrue);
-    expect(reader[0], '1');
-    expect(reader['test'], '1');
+    expect(reader[0], 1);
+    expect(reader['test'], 1);
     expect(await reader.read(), isFalse);
 
     await conn.close();

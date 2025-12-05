@@ -5,7 +5,6 @@ import '../npgsql_data_reader.dart';
 import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
 import '../types/type_handler.dart';
-import '../types/oid.dart';
 import 'npgsql_connector.dart';
 
 class NpgsqlDataReaderImpl implements NpgsqlDataReader {
@@ -153,28 +152,15 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
 
     final fieldDesc = _rowDescription!.fields[index];
     final oid = fieldDesc.oid;
+    final isText = fieldDesc.format.code == 0;
 
-    // If format is text (0), just decode utf8.
-    // fieldDesc.format is DataFormat enum
-    if (fieldDesc.format.code == 0) {
-      final text = utf8.decode(colData);
-
-      // Basic parsing for simple query convenience (Text Mode)
-      if (oid == Oid.int4) return int.tryParse(text) ?? text;
-      if (oid == Oid.int8) return int.tryParse(text) ?? text; // bigint
-      if (oid == Oid.int2) return int.tryParse(text) ?? text; // smallint
-      if (oid == Oid.bool) return text == 't';
-
-      return text;
-    }
-
-    // Binary format
     final handler = _typeRegistry.resolve(oid);
     if (handler != null) {
-      return handler.read(colData);
+      return handler.read(colData, isText: isText);
     }
 
     // Fallback
+    if (isText) return utf8.decode(colData);
     return colData;
   }
 

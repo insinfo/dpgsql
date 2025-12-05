@@ -5,6 +5,7 @@ import 'npgsql_command.dart';
 import 'npgsql_data_reader.dart';
 import 'npgsql_parameter_collection.dart';
 import 'npgsql_transaction.dart';
+import 'ssl_mode.dart';
 import 'internal/npgsql_connector.dart';
 
 enum ConnectionState { closed, open, connecting, executing, fetching }
@@ -48,6 +49,7 @@ class NpgsqlConnection {
         username: settings['Username'] ?? settings['User ID'] ?? 'postgres',
         password: settings['Password'] ?? '',
         database: settings['Database'] ?? 'postgres',
+        sslMode: _parseSslMode(settings['SSL Mode'] ?? settings['SslMode']),
       );
 
       await _connector!.open();
@@ -151,5 +153,21 @@ class NpgsqlConnection {
       }
     }
     return map;
+  }
+
+  SslMode _parseSslMode(String? value) {
+    if (value == null) return SslMode.disable;
+    switch (value.toLowerCase()) {
+      case 'disable':
+        return SslMode.disable;
+      case 'allow':
+        return SslMode.allow;
+      case 'prefer':
+        return SslMode.prefer;
+      case 'require':
+        return SslMode.require;
+      default:
+        return SslMode.disable;
+    }
   }
 }
