@@ -64,14 +64,14 @@ Progresso 2025-12-05 (Parte 7):
 - **Transações Implementadas**: Criado `NpgsqlTransaction` com suporte a `commit()` e `rollback()`.
 - **COPY Proto**: Adicionadas mensagens de Frontend `CopyData`, `CopyDone`, `CopyFail`.
 
-Progresso 2025-12-05 (Parte 8):
-- **Cleanup & Lint Fixes**: Removidos imports e variáveis não utilizadas.
-- **Protocolo & Transações Corrigidos**: Bugs de sincronização do protocolo (consumo de `ReadyForQuery`) corrigidos em `NpgsqlDataReaderImpl`, `beginTransaction`, `commit` e `rollback`.
-- **Text Mode Parsing**: Adicionado suporte básico para parse de Int4, Int8 e Bool no `NpgsqlDataReaderImpl` (Necessário para Simple Query Protocol).
-- **Teste de Integração Real**: `test/real_integration_test.dart` passando com sucesso contra Postgres real (localhost:5432).
+Progresso 2025-12-05 (Parte 9):
+- **API de COPY (Binary Import)**: Implementado `beginBinaryImport` em `NpgsqlConnection` e classe `NpgsqlBinaryImporter`.
+- **Protocolo COPY**: Suporte a mensagens `CopyData`, `CopyDone`, `CopyFail`, `CopyInResponse` no `NpgsqlConnector`.
+- **Sincronização de Protocolo**: Ajustado `awaitCopyComplete` para consumir `ReadyForQuery`, corrigindo bug de sincronia em Simple Query mode.
+- **Teste Real COPY**: `test/real_copy_test.dart` criado e passando com sucesso (Insert via COPY + Select verification).
 
-Novos Próximos Passos:
-- Implementar API de COPY (`beginBinaryImport`, etc).
+Próximos Passos:
+- Implementar `beginBinaryExport` (COPY TO STDOUT).
 - Implementar Mock real para SCRAM-SHA-256 para validar autenticação no teste (sem depender de servidor real se possível).
 - Refinar robustez de ArrayHandler (multidimensional, nulls) e Text Parsing para Arrays.
 - Implementar `Prepare()` para usar Extended Query Protocol explicitamente.

@@ -56,6 +56,8 @@ class NpgsqlConnector {
   int _backendProcessId = 0;
   int _backendSecretKey = 0;
 
+  TypeHandlerRegistry get typeRegistry => _typeRegistry;
+
   /// Opens the connection.
   Future<void> open() async {
     if (_isConnected) return;
@@ -252,6 +254,74 @@ class NpgsqlConnector {
       final reader = NpgsqlDataReaderImpl(this);
       await reader.init();
       return reader;
+    }
+  }
+
+  Future<void> executeCopyCommand(String sql) async {
+    // Send Query
+    await _frontendMessages!.writeQuery(sql);
+
+    // Read responses until CopyInResponse
+    while (true) {
+      final msg = await _readMessage();
+      if (msg is ErrorResponseMessage) {
+        final err = msg.error;
+        throw PostgresException(
+            severity: err.severity ?? 'ERROR',
+            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
+            sqlState: err.sqlState ?? '00000',
+            messageText: err.messageText ?? 'Unknown Error');
+      }
+
+      if (msg is CopyResponseMessage) {
+        if (msg.kind == CopyResponseKind.copyIn) {
+          return;
+        }
+        // If copyOut/Both not supported yet
+        throw PostgresException(
+            severity: 'ERROR',
+            invariantSeverity: 'ERROR',
+            sqlState: '0A000',
+            messageText: 'Unexpected CopyResponseKind: ${msg.kind}');
+      }
+      // Could be Notice, etc.
+    }
+  }
+
+  Future<void> writeCopyData(Uint8List data) async {
+    await _frontendMessages!.writeCopyData(data);
+  }
+
+  Future<void> writeCopyDone() async {
+    await _frontendMessages!.writeCopyDone();
+  }
+
+  Future<void> writeCopyFail(String msg) async {
+    await _frontendMessages!.writeCopyFail(msg);
+  }
+
+  Future<void> awaitCopyComplete() async {
+    bool seenCommandComplete = false;
+    while (true) {
+      final msg = await _readMessage();
+      if (msg is CommandCompleteMessage) {
+        seenCommandComplete = true;
+        // In Simple Query protocol, we must also wait for ReadyForQuery
+        continue;
+      }
+      if (msg is ReadyForQueryMessage) {
+        if (seenCommandComplete) return;
+        // If we got ReadyForQuery without CommandComplete, something is weird but we are ready.
+        return;
+      }
+      if (msg is ErrorResponseMessage) {
+        final err = msg.error;
+        throw PostgresException(
+            severity: err.severity ?? 'ERROR',
+            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
+            sqlState: err.sqlState ?? '00000',
+            messageText: err.messageText ?? 'Unknown Error');
+      }
     }
   }
 

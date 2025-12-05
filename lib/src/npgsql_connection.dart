@@ -1,4 +1,4 @@
-import 'dart:async';
+import 'npgsql_binary_importer.dart';
 import 'npgsql_command.dart';
 import 'npgsql_data_reader.dart';
 import 'npgsql_parameter_collection.dart';
@@ -24,7 +24,7 @@ class NpgsqlConnection {
   }
 
   NpgsqlConnection.fromConnector(this._connector, this._returnToPoolAction)
-      : connectionString = '', // derived from connector?
+      : connectionString = '',
         _state = ConnectionState.open;
 
   final void Function(NpgsqlConnector)? _returnToPoolAction;
@@ -99,6 +99,14 @@ class NpgsqlConnection {
       throw StateError('Connection closed');
     }
     return _connector!.executeReader(commandText, parameters: parameters);
+  }
+
+  /// Starts a binary COPY FROM STDIN operation.
+  Future<NpgsqlBinaryImporter> beginBinaryImport(String copyFromCommand) async {
+    if (_connector == null) throw StateError('Connection closed');
+    final importer = NpgsqlBinaryImporter(_connector!, copyFromCommand);
+    await importer.init();
+    return importer;
   }
 
   // TODO: Move to a proper ConnectionStringBuilder/Parser class
