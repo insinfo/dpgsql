@@ -1,0 +1,17 @@
+name: dpgsql 
+description: High Performance PostgreSQL Driver for Dart 
+version: 1.0.0
+homepage: 
+repository: https://github.com/insinfo/dpgsql
+
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+    
+dependencies:  
+  galileo_utf: ^3.0.0
+  pointycastle: ^4.0.0
+  tuple: ^2.0.2
+
+dev_dependencies:
+  test: any
+
