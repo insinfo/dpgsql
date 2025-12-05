@@ -166,12 +166,75 @@ class FrontendMessages {
   /// Terminate: 'X' sem payload.
   Future<void> writeTerminate() => _writer.writeMessage(_charCode('X'), (_) {});
 
+  /// CancelRequest: Length(16) + Code(80877102) + PID + Key.
+  /// Note: This is sent on a new connection, not wrapped in a standard message.
+  Future<void> writeCancelRequest(int processId, int secretKey) async {
+    final buffer = _writer.output;
+    buffer.writeInt32(16); // Length
+    buffer.writeInt32(80877102); // CancelRequest Code
+    buffer.writeInt32(processId);
+    buffer.writeInt32(secretKey);
+    await buffer.flush();
+  }
+
+  Future<void> writePassword(String password) async {
+    await _writer.writeMessage(_charCode('p'), (body) {
+      body.writeBytes(_encodeCString(password));
+    });
+  }
+
+  /// SASLInitialResponse: 'p' + mech(CString) + len(Int32) + data(Bytes).
+  Future<void> writeSASLInitialResponse(
+      String mechanism, String initialData) async {
+    await _writer.writeMessage(_charCode('p'), (body) {
+      body.writeBytes(_encodeCString(mechanism));
+      if (initialData.isEmpty) {
+        body.writeInt32(-1);
+      } else {
+        final bytes = _encodeString(initialData); // Not CString, just bytes
+        body.writeInt32(bytes.length);
+        body.writeBytes(bytes);
+      }
+    });
+  }
+
+  /// SASLResponse: 'p' + data(Bytes).
+  Future<void> writeSASLResponse(String data) async {
+    await _writer.writeMessage(_charCode('p'), (body) {
+      final bytes = _encodeString(data);
+      body.writeBytes(bytes);
+    });
+  }
+
+  Uint8List _encodeString(String value) {
+    return Uint8List.fromList(value.codeUnits); // UTF8?
+  }
+
   Uint8List _encodeCString(String value) {
     final codeUnits = value.codeUnits;
     final out = Uint8List(codeUnits.length + 1);
     out.setRange(0, codeUnits.length, codeUnits);
     out[codeUnits.length] = 0;
     return out;
+  }
+
+  /// CopyData: 'd' + data.
+  Future<void> writeCopyData(Uint8List data) async {
+    await _writer.writeMessage(_charCode('d'), (body) {
+      body.writeBytes(data);
+    });
+  }
+
+  /// CopyDone: 'c'.
+  Future<void> writeCopyDone() async {
+    await _writer.writeMessage(_charCode('c'), (_) {});
+  }
+
+  /// CopyFail: 'f' + error message.
+  Future<void> writeCopyFail(String message) async {
+    await _writer.writeMessage(_charCode('f'), (body) {
+      body.writeBytes(_encodeCString(message));
+    });
   }
 
   int _charCode(String char) {
