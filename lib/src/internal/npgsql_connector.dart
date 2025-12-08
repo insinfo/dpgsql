@@ -18,6 +18,7 @@ import '../npgsql_batch.dart';
 import 'npgsql_data_reader_impl.dart';
 import 'scram_authenticator.dart';
 import 'sql_rewriter.dart';
+import 'pipeline_command_queue.dart';
 import '../npgsql_notification_event_args.dart';
 import '../ssl_mode.dart';
 
@@ -693,6 +694,73 @@ class NpgsqlConnector {
             invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
             sqlState: err.sqlState ?? '00000',
             messageText: err.messageText ?? 'Unknown Error');
+      }
+    }
+  }
+
+  // Pipeline Mode Support
+
+  PipelineCommandQueue? _pipelineQueue;
+
+  /// Whether the connector is currently in pipeline mode.
+  bool get inPipelineMode => _pipelineQueue?.inPipelineMode ?? false;
+
+  /// Enter pipeline mode.
+  void enterPipelineMode() {
+    if (_pipelineQueue == null) {
+      _pipelineQueue = PipelineCommandQueue();
+    }
+    _pipelineQueue!.enterPipelineMode();
+  }
+
+  /// Exit pipeline mode.
+  void exitPipelineMode() {
+    if (_pipelineQueue == null || !_pipelineQueue!.inPipelineMode) {
+      throw StateError('Not in pipeline mode');
+    }
+    _pipelineQueue!.exitPipelineMode();
+  }
+
+  /// Send a Sync message and wait for ReadyForQuery.
+  Future<void> pipelineSync() async {
+    if (!inPipelineMode) {
+      throw StateError('Not in pipeline mode');
+    }
+
+    // Send Sync message
+    _frontendMessages!.writeSync();
+    await _writeBuffer!.flush();
+
+    // Wait for ReadyForQuery
+    while (true) {
+      final msg = await readMessage();
+
+      // Process any pending command responses
+      if (_pipelineQueue!.peek() != null) {
+        final pendingCmd = _pipelineQueue!.peek()!;
+
+        if (msg is ParseCompleteMessage ||
+            msg is BindCompleteMessage ||
+            msg is CommandCompleteMessage ||
+            msg is RowDescriptionMessage) {
+          pendingCmd.recordResponse();
+          _pipelineQueue!.removeCompleted();
+        }
+
+        if (msg is ErrorResponseMessage) {
+          final err = msg.error;
+          pendingCmd.markFailed(PostgresException(
+            severity: err.severity ?? 'ERROR',
+            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
+            sqlState: err.sqlState ?? '00000',
+            messageText: err.messageText ?? 'Unknown Error',
+          ));
+          _pipelineQueue!.removeCompleted();
+        }
+      }
+
+      if (msg is ReadyForQueryMessage) {
+        return; // Sync complete
       }
     }
   }

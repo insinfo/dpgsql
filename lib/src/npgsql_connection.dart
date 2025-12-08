@@ -206,4 +206,35 @@ class NpgsqlConnection {
     // We need to implement executeBatch in NpgsqlConnector
     return _connector!.executeBatch(batch);
   }
+
+  // Pipeline Mode API
+
+  /// Enters pipeline mode, allowing multiple commands to be sent without waiting for responses.
+  /// This is a low-level API for advanced scenarios. Most users should use createBatch() instead.
+  void enterPipelineMode() {
+    if (_state != ConnectionState.open) {
+      throw StateError('Connection is not open');
+    }
+    _connector!.enterPipelineMode();
+  }
+
+  /// Exits pipeline mode. All pending commands must be completed before calling this.
+  void exitPipelineMode() {
+    if (_connector == null) {
+      throw StateError('Connection is closed');
+    }
+    _connector!.exitPipelineMode();
+  }
+
+  /// Sends a Sync message, which acts as a barrier in pipeline mode.
+  /// All commands sent before this will be executed before any commands sent after.
+  Future<void> pipelineSync() async {
+    if (_connector == null) {
+      throw StateError('Connection is closed');
+    }
+    await _connector!.pipelineSync();
+  }
+
+  /// Whether the connection is currently in pipeline mode.
+  bool get inPipelineMode => _connector?.inPipelineMode ?? false;
 }
