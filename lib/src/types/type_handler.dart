@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'dart:convert';
 import '../npgsql_db_type.dart';
+import '../internal/timezone_helper.dart';
 import 'oid.dart';
 import 'json_handler.dart';
 import 'geometric_handlers.dart';
@@ -145,8 +146,6 @@ class TimestampHandler extends TypeHandler<DateTime> {
   @override
   int get oid => Oid.timestamp;
 
-  static final DateTime _pgEpoch = DateTime.utc(2000, 1, 1);
-
   @override
   DateTime read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
@@ -156,27 +155,13 @@ class TimestampHandler extends TypeHandler<DateTime> {
     final bd = ByteData.sublistView(buffer);
     final micros = bd.getInt64(0);
 
-    // Fix timezone transition (https://github.com/dart-lang/sdk/issues/56312)
-    final nowDt = DateTime.now();
-    var baseDt = DateTime(2000);
-    if (baseDt.timeZoneOffset != nowDt.timeZoneOffset) {
-      final difference = baseDt.timeZoneOffset - nowDt.timeZoneOffset;
-      baseDt = baseDt.add(difference);
-    }
-
+    final baseDt = TimezoneHelper.fixTimezoneTransition(DateTime(2000));
     return baseDt.add(Duration(microseconds: micros));
   }
 
   @override
   Uint8List write(DateTime value, {Encoding encoding = utf8}) {
-    // Fix timezone transition for encoding
-    final nowDt = DateTime.now();
-    var baseDt = DateTime(2000);
-    if (baseDt.timeZoneOffset != nowDt.timeZoneOffset) {
-      final difference = baseDt.timeZoneOffset - nowDt.timeZoneOffset;
-      baseDt = baseDt.add(difference);
-    }
-
+    final baseDt = TimezoneHelper.fixTimezoneTransition(DateTime(2000));
     final diff = value.difference(baseDt).inMicroseconds;
     final bd = ByteData(8);
     bd.setInt64(0, diff);

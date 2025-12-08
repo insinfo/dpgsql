@@ -3,8 +3,9 @@ C:\MyDartProjects\npgsql\referencias\npgsql-main
 foque em ser mais proximo possivel da versão original npgsql ou seja mesmos nomes de classes, arquivos e metodos para facilitar diff
 reponda sempre em portugues
 continue portando o C:\MyDartProjects\npgsql\referencias\npgsql-main para dart e atualizando o C:\MyDartProjects\npgsql\TODO.md
-
+não commita nada
 use o comando rg para buscar no codigo fonte
+use o comando timeout-cli 
 timeout-cli.exe 30 dart test test\montgomery_fast_test.dart
 referencias de implementação C:\MyDartProjects\dpgsql\referencias
 
@@ -75,6 +76,27 @@ Progresso 2025-12-07 (Parte 21 - Current):
     - Operador `[]` para acesso a propriedades por nome.
 - **Testes**: Todos os 63 testes passando (2 skipped por mocks incompletos).
 - **Qualidade**: `dart analyze` - No issues found! ✅
+
+Progresso 2025-12-08 (Parte 22):
+- **Buffering**: `WriteBuffer` ganhou `hasPending`, espelhando o controle de fila do Npgsql e permitindo flush condicional no writer.
+- **PostgresMessageWriter**: Removidas `!` redundantes e promovido uso de buffer seguro, alinhando com padrões null-safe.
+- **Type Handlers**: Limpeza em `TimestampHandler` (remoção de campo não utilizado) mantendo lógica de epoch local.
+- **Testes**: Removido helper `_usageExample` que dependia de banco real, deixando `timezone_encoding_test.dart` focado em validações determinísticas.
+- **Qualidade**: `dart analyze` continua sem issues.
+
+Progresso 2025-12-08 (Parte 23):
+- **Pipeline Buffering**: `PostgresMessageWriter` agora dispara `flushIfNeeded()` para buffers grandes, replicando a política de coalescência do Npgsql e evitando estouro de memória.
+- **API Writer**: Exposto método `flushIfNeeded()` público para cenários que controlam flush manual (pipeline, batches).
+- **Binary I/O**: `BinaryOutput` recebe `writeUint16/Uint32`, `BinaryInput` ganha `readUint16/Uint32` (incluindo `_CopyStreamBinaryInput`), permitindo suportar OIDs acima de 2³¹.
+- **Perf Writer**: `PostgresMessageWriter` reutiliza buffer interno (scratch), evita alocações por mensagem e protege contra uso concorrente.
+- **Testes**: Coberto `writeParse` com OID uint32 em `frontend_messages_test.dart`.
+- **Qualidade**: `dart analyze` segue limpo.
+
+Progresso 2025-12-08 (Parte 24):
+- **Pipeline Queue**: `readMessage()` agora sincroniza a fila de `PendingCommand`, marca comandos apenas após `CommandComplete` e realiza auto `exitPipelineMode()` quando `ReadyForQuery` chega.
+- **Batch Pipeline**: `executeQueryPipelined` ficou assíncrono, garante envio sequencial e `pipelineSync()` passou a apenas disparar o `Sync` + flush, evitando consumir respostas do leitor.
+- **Pooling**: `_healthCheck` e `_resetConnection` usam timeouts curtos (100ms), prevenindo hangs com servidores mock e mantendo reaproveitamento de conexões.
+- **Testes**: `batch_test.dart`, `datasource_pool_test.dart` e `datasource_test.dart` agora passam sem timeouts; suíte completa `dart test` ✅.
 
 
 o foco é criar um driver postgresql de alto desempenho inspirado (portar) o npgsql para dart C:\MyDartProjects\npgsql\referencias\npgsql-main foque em ser mais proximo possivel da versão original npgsql ou seja mesmos nomes de classes, arquivos e metodos para facilitar diff reponda sempre em portugues continue portando o C:\MyDartProjects\npgsql\referencias\npgsql-main para dart e atualizando o C:\MyDartProjects\npgsql\TODO.md
@@ -232,15 +254,15 @@ Optimize buffer usage.
 - [x] Auto-prepare após N execuções (threshold configurável)
 - [x] LRU tracking (lastUsed timestamp)
 - [x] Métricas de hit/miss do cache
-- [ ] LRU eviction quando cache atinge limite
+- [x] LRU eviction quando cache atinge limite
 - [ ] Integração com pool de conexões (cache por conexão)
 
 **4. Pool de Conexões Robusto**
 - [x] Pool básico em NpgsqlDataSource (implementado)
-- [ ] Reset de estado no checkout (rollback transações abertas)
-- [ ] Limpar prepared statements/portals órfãos
-- [ ] Health check de conexões antes de retornar do pool
-- [ ] Métricas de pool (conexões ativas, idle, tempo de espera)
+- [x] Reset de estado no checkout (rollback transações abertas)
+- [x] Limpar prepared statements/portals órfãos (DISCARD ALL)
+- [x] Health check de conexões antes de retornar do pool
+- [x] Métricas de pool (conexões ativas, idle, tempo de espera)
 - [ ] Connection warmup (pre-create connections)
 
 ### 📊 Média Prioridade (Funcionalidades Importantes)

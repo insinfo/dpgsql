@@ -142,6 +142,14 @@ class _CopyStreamBinaryInput extends BinaryInput {
   }
 
   @override
+  int readUint16() {
+    if (_available < 2) throw Exception('Buffer empty');
+    final b1 = _buffer[_offset++];
+    final b2 = _buffer[_offset++];
+    return (b1 << 8) | b2;
+  }
+
+  @override
   int readInt32() {
     if (_available < 4) throw Exception('Buffer empty');
     final b1 = _buffer[_offset++];
@@ -149,6 +157,16 @@ class _CopyStreamBinaryInput extends BinaryInput {
     final b3 = _buffer[_offset++];
     final b4 = _buffer[_offset++];
     return ((b1 << 24) | (b2 << 16) | (b3 << 8) | b4).toSigned(32);
+  }
+
+  @override
+  int readUint32() {
+    if (_available < 4) throw Exception('Buffer empty');
+    final b1 = _buffer[_offset++];
+    final b2 = _buffer[_offset++];
+    final b3 = _buffer[_offset++];
+    final b4 = _buffer[_offset++];
+    return (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
   }
 
   @override

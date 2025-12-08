@@ -341,6 +341,8 @@ class NpgsqlConnector {
     while (true) {
       final msg = await _readRawMessage();
 
+      _processPipelineMessage(msg);
+
       if (msg is NotificationResponseMessage) {
         _notificationController.add(NpgsqlNotificationEventArgs(
             msg.channel, msg.payload, msg.processId));
@@ -361,6 +363,65 @@ class NpgsqlConnector {
   Future<IBackendMessage> _readMessage() {
     // Legacy internal call, redirect to central handler to ensure we don't miss notifications
     return readMessage();
+  }
+
+  void _processPipelineMessage(IBackendMessage msg) {
+    if (msg is ReadyForQueryMessage) {
+      _handleReadyForQueryMessage();
+    }
+
+    if (_pipelineQueue == null || !_pipelineQueue!.inPipelineMode) {
+      return;
+    }
+
+    final pendingCmd = _pipelineQueue!.peek();
+    if (pendingCmd == null) {
+      return;
+    }
+
+    if (msg is ParseCompleteMessage || msg is BindCompleteMessage) {
+      pendingCmd.recordResponse();
+      return;
+    }
+
+    if (msg is RowDescriptionMessage || msg is NoDataMessage) {
+      pendingCmd.recordResponse();
+      return;
+    }
+
+    if (msg is CommandCompleteMessage) {
+      pendingCmd.recordResponse();
+      pendingCmd.markCompleted();
+      _pipelineQueue!.removeCompleted();
+      return;
+    }
+
+    if (msg is ErrorResponseMessage) {
+      final err = msg.error;
+      pendingCmd.markFailed(PostgresException(
+        severity: err.severity ?? 'ERROR',
+        invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
+        sqlState: err.sqlState ?? '00000',
+        messageText: err.messageText ?? 'Unknown Error',
+      ));
+      _pipelineQueue!.removeCompleted();
+      return;
+    }
+  }
+
+  void _handleReadyForQueryMessage() {
+    if (!_autoExitPipelineOnReady) {
+      return;
+    }
+
+    _autoExitPipelineOnReady = false;
+
+    if (_pipelineQueue != null) {
+      _pipelineQueue!.clear();
+      if (_pipelineQueue!.inPipelineMode) {
+        _pipelineQueue!.exitPipelineMode();
+      }
+    }
   }
 
   Future<IBackendMessage> _readRawMessage() async {
@@ -541,19 +602,20 @@ class NpgsqlConnector {
           paramsToUse.addAll(rewritten.orderedParameters);
         }
 
-        executeQueryPipelined(
+        await executeQueryPipelined(
           sql: sqlToExecute,
           parameters: paramsToUse,
         );
       }
 
       await pipelineSync();
-
       if (!wasInPipeline) {
-        exitPipelineMode();
+        _autoExitPipelineOnReady = true;
       }
     } catch (e) {
       if (!wasInPipeline && inPipelineMode) {
+        _autoExitPipelineOnReady = false;
+        _pipelineQueue?.clear(e);
         exitPipelineMode();
       }
       rethrow;
@@ -665,6 +727,7 @@ class NpgsqlConnector {
   // Pipeline Mode Support
 
   PipelineCommandQueue? _pipelineQueue;
+  bool _autoExitPipelineOnReady = false;
 
   /// Whether the connector is currently in pipeline mode.
   bool get inPipelineMode => _pipelineQueue?.inPipelineMode ?? false;
@@ -675,6 +738,7 @@ class NpgsqlConnector {
       _pipelineQueue = PipelineCommandQueue();
     }
     _pipelineQueue!.enterPipelineMode();
+    _autoExitPipelineOnReady = false;
   }
 
   /// Exit pipeline mode.
@@ -683,60 +747,32 @@ class NpgsqlConnector {
       throw StateError('Not in pipeline mode');
     }
     _pipelineQueue!.exitPipelineMode();
+    _autoExitPipelineOnReady = false;
   }
 
-  /// Send a Sync message and wait for ReadyForQuery.
+  /// Send a Sync message to terminate the current pipeline batch.
   Future<void> pipelineSync() async {
     if (!inPipelineMode) {
       throw StateError('Not in pipeline mode');
     }
 
     // Send Sync message
-    _frontendMessages!.writeSync();
-    await _writeBuffer!.flush();
-
-    // Wait for ReadyForQuery
-    while (true) {
-      final msg = await readMessage();
-
-      // Process any pending command responses
-      if (_pipelineQueue!.peek() != null) {
-        final pendingCmd = _pipelineQueue!.peek()!;
-
-        if (msg is ParseCompleteMessage ||
-            msg is BindCompleteMessage ||
-            msg is CommandCompleteMessage ||
-            msg is RowDescriptionMessage) {
-          pendingCmd.recordResponse();
-          _pipelineQueue!.removeCompleted();
-        }
-
-        if (msg is ErrorResponseMessage) {
-          final err = msg.error;
-          pendingCmd.markFailed(PostgresException(
-            severity: err.severity ?? 'ERROR',
-            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-            sqlState: err.sqlState ?? '00000',
-            messageText: err.messageText ?? 'Unknown Error',
-          ));
-          _pipelineQueue!.removeCompleted();
-        }
-      }
-
-      if (msg is ReadyForQueryMessage) {
-        return; // Sync complete
-      }
+    await _frontendMessages!.writeSync(flush: false);
+    if (_writeBuffer != null) {
+      await _writeBuffer!.flush();
+    } else if (_msgWriter != null) {
+      await _msgWriter!.flush();
     }
   }
 
-  /// Execute a query in pipeline mode (send without waiting for response).
-  /// Returns a PendingCommand that can be used to track completion.
+  /// Execute a query in pipeline mode (send without awaiting server response).
+  /// Returns a [PendingCommand] that can be used to track completion.
   /// Must be in pipeline mode before calling this.
-  PendingCommand executeQueryPipelined({
+  Future<PendingCommand> executeQueryPipelined({
     required String sql,
     String? statementName,
     NpgsqlParameterCollection? parameters,
-  }) {
+  }) async {
     if (!inPipelineMode) {
       throw StateError('Not in pipeline mode. Call enterPipelineMode() first.');
     }
@@ -756,8 +792,8 @@ class NpgsqlConnector {
 
     _pipelineQueue!.enqueue(pendingCmd);
 
-    // Send Parse, Bind, Execute (without flush/await)
-    _sendQueryMessages(
+    // Send Parse, Bind, Execute without forcing a flush
+    await _sendQueryMessages(
       sql: sql,
       statementName: statementName,
       parameters: parameters,
@@ -766,13 +802,13 @@ class NpgsqlConnector {
     return pendingCmd;
   }
 
-  /// Send Parse/Bind/Execute messages without flush.
+  /// Send Parse/Bind/Execute messages without triggering an immediate flush.
   /// This is used for pipeline mode.
-  void _sendQueryMessages({
+  Future<void> _sendQueryMessages({
     required String sql,
     String? statementName,
     NpgsqlParameterCollection? parameters,
-  }) {
+  }) async {
     final params = parameters ?? NpgsqlParameterCollection();
 
     // Collect parameter OIDs and values
@@ -793,10 +829,11 @@ class NpgsqlConnector {
 
     // Write Parse if not already prepared
     if (statementName == null || statementName.isEmpty) {
-      _frontendMessages!.writeParse(
+      await _frontendMessages!.writeParse(
         statementName: '',
         query: sql,
         parameterTypeOids: paramOids,
+        flush: false,
       );
     }
 
@@ -816,15 +853,20 @@ class NpgsqlConnector {
       }
     }
 
-    _frontendMessages!.writeBind(
+    await _frontendMessages!.writeBind(
       portalName: '',
       statementName: statementName ?? '',
       parameterValues: encodedParams,
       resultFormatCodes: [1], // Binary format
+      flush: false,
     );
 
     // Write Execute
-    _frontendMessages!.writeExecute(portalName: '', maxRows: 0);
+    await _frontendMessages!.writeExecute(
+      portalName: '',
+      maxRows: 0,
+      flush: false,
+    );
 
     // Note: We do NOT send Sync or flush here
     // The caller must call pipelineSync() when ready

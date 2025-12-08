@@ -65,10 +65,10 @@ class FrontendMessages {
   }
 
   /// Envia uma mensagem Query ('Q' + length + sql + terminador).
-  Future<void> writeQuery(String sql) async {
-    await _writer.writeMessage(_charCode('Q'), (body) {
+  Future<void> writeQuery(String sql, {bool flush = true}) {
+    return _writer.writeMessage(_charCode('Q'), (body) {
       body.writeBytes(_encodeCString(sql));
-    });
+    }, flush: flush);
   }
 
   /// Parse: 'P' + statement name + query + parameter type oids (int16 count + int32 oids).
@@ -76,15 +76,16 @@ class FrontendMessages {
     String statementName = '',
     required String query,
     List<int> parameterTypeOids = const [],
-  }) async {
-    await _writer.writeMessage(_charCode('P'), (body) {
+    bool flush = true,
+  }) {
+    return _writer.writeMessage(_charCode('P'), (body) {
       body.writeBytes(_encodeCString(statementName));
       body.writeBytes(_encodeCString(query));
       body.writeInt16(parameterTypeOids.length);
       for (final oid in parameterTypeOids) {
-        body.writeInt32(oid);
+        body.writeUint32(oid);
       }
-    });
+    }, flush: flush);
   }
 
   /// Bind: 'B' + portal + statement + format codes + values + result formats.
@@ -94,7 +95,8 @@ class FrontendMessages {
     List<int> parameterFormatCodes = const [],
     List<List<int>?> parameterValues = const [],
     List<int> resultFormatCodes = const [],
-  }) async {
+    bool flush = true,
+  }) {
     if (parameterFormatCodes.isNotEmpty &&
         parameterFormatCodes.length != 1 &&
         parameterFormatCodes.length != parameterValues.length) {
@@ -109,7 +111,7 @@ class FrontendMessages {
           'resultFormatCodes deve ter 0, 1 ou o mesmo tamanho de parameterValues');
     }
 
-    await _writer.writeMessage(_charCode('B'), (body) {
+    return _writer.writeMessage(_charCode('B'), (body) {
       body.writeBytes(_encodeCString(portalName));
       body.writeBytes(_encodeCString(statementName));
 
@@ -135,7 +137,7 @@ class FrontendMessages {
       for (final fmt in resultFormatCodes) {
         body.writeInt16(fmt);
       }
-    });
+    }, flush: flush);
   }
 
   /// Describe: 'D' + (byte: 'S' para statement, 'P' para portal) + nome.
@@ -155,18 +157,24 @@ class FrontendMessages {
   }
 
   /// Execute: 'E' + portal + max rows.
-  Future<void> writeExecute({String portalName = '', int maxRows = 0}) async {
-    await _writer.writeMessage(_charCode('E'), (body) {
+  Future<void> writeExecute({
+    String portalName = '',
+    int maxRows = 0,
+    bool flush = true,
+  }) {
+    return _writer.writeMessage(_charCode('E'), (body) {
       body.writeBytes(_encodeCString(portalName));
       body.writeInt32(maxRows);
-    });
+    }, flush: flush);
   }
 
   /// Sync: 'S' sem payload.
-  Future<void> writeSync() => _writer.writeMessage(_charCode('S'), (_) {});
+    Future<void> writeSync({bool flush = true}) =>
+      _writer.writeMessage(_charCode('S'), (_) {}, flush: flush);
 
   /// Terminate: 'X' sem payload.
-  Future<void> writeTerminate() => _writer.writeMessage(_charCode('X'), (_) {});
+    Future<void> writeTerminate({bool flush = true}) =>
+      _writer.writeMessage(_charCode('X'), (_) {}, flush: flush);
 
   /// CancelRequest: Length(16) + Code(80877102) + PID + Key.
   /// Note: This is sent on a new connection, not wrapped in a standard message.

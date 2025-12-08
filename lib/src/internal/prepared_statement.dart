@@ -262,4 +262,71 @@ class PreparedStatementManager {
     _cacheHits = 0;
     _cacheMisses = 0;
   }
+
+  /// Evict least recently used auto-prepared statement.
+  /// Returns the evicted statement or null if nothing to evict.
+  PreparedStatement? evictLRU() {
+    if (autoPrepared.isEmpty) return null;
+
+    // Find LRU statement
+    PreparedStatement? lruStatement;
+    int lruIndex = -1;
+    int oldestTime = DateTime.now().microsecondsSinceEpoch;
+
+    for (var i = 0; i < autoPrepared.length; i++) {
+      final stmt = autoPrepared[i];
+      if (stmt != null && !stmt.isExplicit && stmt.lastUsed < oldestTime) {
+        oldestTime = stmt.lastUsed;
+        lruStatement = stmt;
+        lruIndex = i;
+      }
+    }
+
+    if (lruStatement != null && lruIndex >= 0) {
+      // Remove from autoPrepared list
+      autoPrepared[lruIndex] = null;
+
+      // Remove from bySql map
+      bySql.remove(lruStatement.sql);
+
+      // Decrement counter
+      if (lruStatement.isPrepared) {
+        numPrepared--;
+      }
+
+      return lruStatement;
+    }
+
+    return null;
+  }
+
+  /// Evict multiple LRU statements.
+  /// Returns list of evicted statements.
+  List<PreparedStatement> evictLRUMultiple(int count) {
+    final evicted = <PreparedStatement>[];
+
+    for (var i = 0; i < count; i++) {
+      final stmt = evictLRU();
+      if (stmt == null) break;
+      evicted.add(stmt);
+    }
+
+    return evicted;
+  }
+
+  /// Check if cache is full and evict if necessary.
+  /// Called before adding new auto-prepared statement.
+  void ensureCapacity() {
+    if (numPrepared >= maxAutoPrepared) {
+      // Evict 10% of cache to make room
+      final toEvict = (maxAutoPrepared * 0.1).ceil();
+      evictLRUMultiple(toEvict);
+    }
+  }
+
+  /// Get current cache size percentage.
+  double get cacheUsagePercent {
+    if (maxAutoPrepared == 0) return 0.0;
+    return (numPrepared / maxAutoPrepared) * 100;
+  }
 }

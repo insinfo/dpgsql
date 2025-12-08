@@ -98,6 +98,28 @@ void main() {
       expect(input.readInt32(), 25);
     });
 
+    test('Parse suporta OIDs acima de 2^31', () async {
+      final out = MemoryBinaryOutput();
+      final writer = PostgresMessageWriter(out);
+      final frontend = FrontendMessages(writer);
+
+      await frontend.writeParse(
+        statementName: 'big_oid',
+        query: 'select 1',
+        parameterTypeOids: const [0xFFFFFFFE],
+      );
+
+      final msg = await _readSingleFromOutput(out);
+      expect(msg.typeCode, 'P'.codeUnitAt(0));
+      final body = msg.payload;
+      final input = MemoryBinaryInput(body);
+
+      expect(_readCString(input), 'big_oid');
+      expect(_readCString(input), 'select 1');
+      expect(input.readInt16(), 1);
+      expect(input.readUint32(), 0xFFFFFFFE);
+    });
+
     test('Bind com formatos, valores e formatos de resultado', () async {
       final out = MemoryBinaryOutput();
       final writer = PostgresMessageWriter(out);

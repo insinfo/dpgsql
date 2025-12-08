@@ -14,9 +14,14 @@ abstract class BinaryInput {
   /// Lê um inteiro 16-bit big-endian.
   int readInt16();
 
-  /// Lê um inteiro 32-bit big-endian.
+  /// Lê um inteiro 16-bit sem sinal big-endian.
+  int readUint16();
+
   /// Lê um inteiro 32-bit big-endian.
   int readInt32();
+
+  /// Lê um inteiro 32-bit sem sinal big-endian.
+  int readUint32();
 
   /// Lê um inteiro 64-bit big-endian.
   int readInt64();
@@ -165,10 +170,24 @@ class SocketBinaryInput implements BinaryInput {
   }
 
   @override
+  int readUint16() {
+    final chunk = _consume(2);
+    final bd = ByteData.sublistView(chunk);
+    return bd.getUint16(0, Endian.big);
+  }
+
+  @override
   int readInt32() {
     final chunk = _consume(4);
     final bd = ByteData.sublistView(chunk);
     return bd.getInt32(0, Endian.big);
+  }
+
+  @override
+  int readUint32() {
+    final chunk = _consume(4);
+    final bd = ByteData.sublistView(chunk);
+    return bd.getUint32(0, Endian.big);
   }
 
   @override
@@ -219,11 +238,27 @@ class MemoryBinaryInput implements BinaryInput {
   }
 
   @override
+  int readUint16() {
+    _ensureSync(2);
+    final bd = ByteData.sublistView(_buffer, _offset, _offset + 2);
+    _offset += 2;
+    return bd.getUint16(0, Endian.big);
+  }
+
+  @override
   int readInt32() {
     _ensureSync(4);
     final bd = ByteData.sublistView(_buffer, _offset, _offset + 4);
     _offset += 4;
     return bd.getInt32(0, Endian.big);
+  }
+
+  @override
+  int readUint32() {
+    _ensureSync(4);
+    final bd = ByteData.sublistView(_buffer, _offset, _offset + 4);
+    _offset += 4;
+    return bd.getUint32(0, Endian.big);
   }
 
   @override

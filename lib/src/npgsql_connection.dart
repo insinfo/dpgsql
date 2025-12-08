@@ -297,7 +297,7 @@ class NpgsqlConnection {
     enterPipelineMode();
     try {
       for (final sql in sqlCommands) {
-        _connector!.executeQueryPipelined(sql: sql);
+        await _connector!.executeQueryPipelined(sql: sql);
       }
       await pipelineSync();
     } finally {

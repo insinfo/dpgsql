@@ -16,8 +16,14 @@ abstract class BinaryOutput {
   /// Escreve um inteiro 16-bit big-endian.
   void writeInt16(int value);
 
+  /// Escreve um inteiro 16-bit sem sinal (big-endian).
+  void writeUint16(int value);
+
   /// Escreve um inteiro 32-bit big-endian.
   void writeInt32(int value);
+
+  /// Escreve um inteiro 32-bit sem sinal (big-endian).
+  void writeUint32(int value);
 
   /// Escreve um inteiro 64-bit big-endian.
   void writeInt64(int value);
@@ -83,6 +89,17 @@ class SocketBinaryOutput implements BinaryOutput {
   }
 
   @override
+  void writeUint16(int value) {
+    if (value < 0 || value > 0xFFFF) {
+      throw RangeError.range(value, 0, 0xFFFF, 'value');
+    }
+    ensureCapacity(2);
+    final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 2);
+    bd.setUint16(0, value, Endian.big);
+    _writeOffset += 2;
+  }
+
+  @override
   void writeInt32(int value) {
     if (value < -0x80000000 || value > 0x7FFFFFFF) {
       throw RangeError.range(value, -0x80000000, 0x7FFFFFFF, 'value');
@@ -90,6 +107,17 @@ class SocketBinaryOutput implements BinaryOutput {
     ensureCapacity(4);
     final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 4);
     bd.setInt32(0, value, Endian.big);
+    _writeOffset += 4;
+  }
+
+  @override
+  void writeUint32(int value) {
+    if (value < 0 || value > 0xFFFFFFFF) {
+      throw RangeError.range(value, 0, 0xFFFFFFFF, 'value');
+    }
+    ensureCapacity(4);
+    final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 4);
+    bd.setUint32(0, value, Endian.big);
     _writeOffset += 4;
   }
 
@@ -125,6 +153,11 @@ class MemoryBinaryOutput implements BinaryOutput {
 
   Uint8List _buffer;
   int _writeOffset = 0;
+
+  /// Reseta o ponteiro de escrita para reutilizar o buffer.
+  void reset() {
+    _writeOffset = 0;
+  }
 
   @override
   int get length => _writeOffset;
@@ -167,6 +200,17 @@ class MemoryBinaryOutput implements BinaryOutput {
   }
 
   @override
+  void writeUint16(int value) {
+    if (value < 0 || value > 0xFFFF) {
+      throw RangeError.range(value, 0, 0xFFFF, 'value');
+    }
+    ensureCapacity(2);
+    final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 2);
+    bd.setUint16(0, value, Endian.big);
+    _writeOffset += 2;
+  }
+
+  @override
   void writeInt32(int value) {
     if (value < -0x80000000 || value > 0x7FFFFFFF) {
       throw RangeError.range(value, -0x80000000, 0x7FFFFFFF, 'value');
@@ -174,6 +218,17 @@ class MemoryBinaryOutput implements BinaryOutput {
     ensureCapacity(4);
     final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 4);
     bd.setInt32(0, value, Endian.big);
+    _writeOffset += 4;
+  }
+
+  @override
+  void writeUint32(int value) {
+    if (value < 0 || value > 0xFFFFFFFF) {
+      throw RangeError.range(value, 0, 0xFFFFFFFF, 'value');
+    }
+    ensureCapacity(4);
+    final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 4);
+    bd.setUint32(0, value, Endian.big);
     _writeOffset += 4;
   }
 

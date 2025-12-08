@@ -58,10 +58,12 @@ class PendingCommand {
   /// Mark this command as having received a response.
   void recordResponse() {
     receivedResponseCount++;
-    if (receivedResponseCount >= expectedResponseCount) {
-      state = CommandState.completed;
-      completer?.complete();
-    }
+  }
+
+  /// Explicitly mark the command as completed.
+  void markCompleted() {
+    state = CommandState.completed;
+    completer?.complete();
   }
 
   /// Mark this command as failed.
