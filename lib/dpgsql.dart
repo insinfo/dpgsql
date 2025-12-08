@@ -37,3 +37,7 @@ export 'src/replication/logical_replication_protocol.dart';
 
 // Schema
 export 'src/schema/npgsql_db_column.dart';
+
+// Configuration
+export 'src/npgsql_types_config.dart';
+export 'src/placeholder_identifier.dart';

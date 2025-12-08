@@ -238,6 +238,55 @@ class NpgsqlConnection {
   /// Whether the connection is currently in pipeline mode.
   bool get inPipelineMode => _connector?.inPipelineMode ?? false;
 
+  /// Execute a query with optional parameter substitution.
+  /// Supports different placeholder styles: ?, @param, or $1.
+  ///
+  /// Example with question marks (PDO style):
+  /// ```dart
+  /// final results = await conn.query(
+  ///   'SELECT * FROM users WHERE id = ? AND name = ?',
+  ///   substitutionValues: [42, 'Alice'],
+  /// );
+  /// ```
+  ///
+  /// Example with named parameters:
+  /// ```dart
+  /// final results = await conn.query(
+  ///   'SELECT * FROM users WHERE id = @id AND name = @name',
+  ///   substitutionValues: {'id': 42, 'name': 'Alice'},
+  /// );
+  /// ```
+  Future<NpgsqlDataReader> query(
+    String sql, {
+    Object? substitutionValues,
+  }) async {
+    if (_state != ConnectionState.open) {
+      throw StateError('Connection is not open');
+    }
+
+    final cmd = createCommand(sql);
+
+    if (substitutionValues != null) {
+      if (substitutionValues is List) {
+        // Positional parameters (?)
+        for (var i = 0; i < substitutionValues.length; i++) {
+          cmd.parameters.addWithValue('p$i', substitutionValues[i]);
+        }
+      } else if (substitutionValues is Map<String, dynamic>) {
+        // Named parameters (@name)
+        substitutionValues.forEach((name, value) {
+          cmd.parameters.addWithValue(name, value);
+        });
+      } else {
+        throw ArgumentError(
+          'substitutionValues must be List or Map<String, dynamic>',
+        );
+      }
+    }
+
+    return await cmd.executeReader();
+  }
+
   /// Execute multiple commands efficiently using pipeline mode.
   /// This is a convenience wrapper that enters/exits pipeline automatically.
   Future<void> executeBatchPipelined(List<String> sqlCommands) async {
