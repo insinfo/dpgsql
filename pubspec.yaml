@@ -12,5 +12,6 @@ dependencies:
 
 dev_dependencies:
   test: any
+  # for benchmarks
   postgres: any
 
