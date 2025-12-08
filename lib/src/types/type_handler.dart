@@ -151,16 +151,33 @@ class TimestampHandler extends TypeHandler<DateTime> {
   DateTime read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return DateTime.parse(encoding.decode(buffer)); // Basic ISO8601 support
+      return DateTime.parse(encoding.decode(buffer));
     }
     final bd = ByteData.sublistView(buffer);
     final micros = bd.getInt64(0);
-    return _pgEpoch.add(Duration(microseconds: micros));
+
+    // Fix timezone transition (https://github.com/dart-lang/sdk/issues/56312)
+    final nowDt = DateTime.now();
+    var baseDt = DateTime(2000);
+    if (baseDt.timeZoneOffset != nowDt.timeZoneOffset) {
+      final difference = baseDt.timeZoneOffset - nowDt.timeZoneOffset;
+      baseDt = baseDt.add(difference);
+    }
+
+    return baseDt.add(Duration(microseconds: micros));
   }
 
   @override
   Uint8List write(DateTime value, {Encoding encoding = utf8}) {
-    final diff = value.difference(_pgEpoch).inMicroseconds;
+    // Fix timezone transition for encoding
+    final nowDt = DateTime.now();
+    var baseDt = DateTime(2000);
+    if (baseDt.timeZoneOffset != nowDt.timeZoneOffset) {
+      final difference = baseDt.timeZoneOffset - nowDt.timeZoneOffset;
+      baseDt = baseDt.add(difference);
+    }
+
+    final diff = value.difference(baseDt).inMicroseconds;
     final bd = ByteData(8);
     bd.setInt64(0, diff);
     return bd.buffer.asUint8List();
