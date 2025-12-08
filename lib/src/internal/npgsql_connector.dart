@@ -19,6 +19,7 @@ import 'npgsql_data_reader_impl.dart';
 import 'scram_authenticator.dart';
 import 'sql_rewriter.dart';
 import 'pipeline_command_queue.dart';
+import 'pending_command.dart';
 import '../npgsql_notification_event_args.dart';
 import '../ssl_mode.dart';
 
@@ -763,5 +764,106 @@ class NpgsqlConnector {
         return; // Sync complete
       }
     }
+  }
+
+  /// Execute a query in pipeline mode (send without waiting for response).
+  /// Returns a PendingCommand that can be used to track completion.
+  /// Must be in pipeline mode before calling this.
+  PendingCommand executeQueryPipelined({
+    required String sql,
+    String? statementName,
+    NpgsqlParameterCollection? parameters,
+  }) {
+    if (!inPipelineMode) {
+      throw StateError('Not in pipeline mode. Call enterPipelineMode() first.');
+    }
+
+    // Calculate expected response count:
+    // - If using prepared statement: BindComplete(1) + RowDescription(1) + DataRow(*) + CommandComplete(1)
+    // - Parse: ParseComplete(1)
+    // - We'll start with a conservative estimate
+    int expectedResponses =
+        3; // ParseComplete/BindComplete + RowDescription/NoData + CommandComplete
+
+    final pendingCmd = PendingCommand(
+      sql: sql,
+      statementName: statementName,
+      expectedResponseCount: expectedResponses,
+    );
+
+    _pipelineQueue!.enqueue(pendingCmd);
+
+    // Send Parse, Bind, Execute (without flush/await)
+    _sendQueryMessages(
+      sql: sql,
+      statementName: statementName,
+      parameters: parameters,
+    );
+
+    return pendingCmd;
+  }
+
+  /// Send Parse/Bind/Execute messages without flush.
+  /// This is used for pipeline mode.
+  void _sendQueryMessages({
+    required String sql,
+    String? statementName,
+    NpgsqlParameterCollection? parameters,
+  }) {
+    final params = parameters ?? NpgsqlParameterCollection();
+
+    // Collect parameter OIDs and values
+    final paramOids = <int>[];
+    final paramValues = <dynamic>[];
+
+    for (final p in params) {
+      TypeHandler? handler;
+      if (p.npgsqlDbType != null) {
+        handler = _typeRegistry.resolveByNpgsqlDbType(p.npgsqlDbType!);
+      }
+      if (handler == null) {
+        handler = _typeRegistry.resolveByValue(p.value);
+      }
+      paramOids.add(handler?.oid ?? 0);
+      paramValues.add(p.value);
+    }
+
+    // Write Parse if not already prepared
+    if (statementName == null || statementName.isEmpty) {
+      _frontendMessages!.writeParse(
+        statementName: '',
+        query: sql,
+        parameterTypeOids: paramOids,
+      );
+    }
+
+    // Write Bind
+    final encodedParams = <List<int>?>[];
+    for (var i = 0; i < paramValues.length; i++) {
+      final value = paramValues[i];
+      if (value == null) {
+        encodedParams.add(null);
+      } else {
+        final handler = _typeRegistry.resolveByValue(value);
+        if (handler != null) {
+          encodedParams.add(handler.write(value));
+        } else {
+          encodedParams.add(null);
+        }
+      }
+    }
+
+    _frontendMessages!.writeBind(
+      portalName: '',
+      statementName: statementName ?? '',
+      parameterValues: encodedParams,
+      resultFormatCodes: [1], // Binary format
+    );
+
+    // Write Execute
+    _frontendMessages!.writeExecute(portalName: '', maxRows: 0);
+
+    // Note: We do NOT send Sync or flush here
+    // The caller must call pipelineSync() when ready
   }
 }

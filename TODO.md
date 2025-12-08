@@ -208,13 +208,15 @@ Optimize buffer usage.
 ### ⚡ Alta Prioridade (Performance Crítica)
 
 **1. Pipeline Mode (Protocolo Estendido Avançado)** ⚙️ **EM ANDAMENTO**
-- [x] Implementar fila de comandos pendentes (PendingCommandQueue)
+- [x] Implementar fila de comandos pendentes (PipelineCommandQueue)
 - [x] Estrutura básica de PendingCommand com estado e tracking
 - [x] API básica: enterPipelineMode / exitPipelineMode / pipelineSync
-- [ ] Suporte a envio de múltiplos Parse/Bind/Execute sem aguardar resposta
-- [ ] Tratamento correto de Sync como barreira
+- [x] Método executeQueryPipelined para envio sem await
+- [x] _sendQueryMessages para envio de Parse/Bind/Execute sem flush
+- [ ] Tratamento completo de respostas em pipeline (DataRow streaming)
 - [ ] Gestão completa de erro em pipeline (ErrorResponse + descarte até próximo Sync)
 - [ ] Integração com NpgsqlCommand para pipeline automático
+- [ ] Otimização de flush (buffer aggregation)
 
 **2. Batch API Completo**
 - [x] NpgsqlBatch básico (existente mas precisa integração com pipeline)
