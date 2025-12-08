@@ -71,6 +71,16 @@ class PipelineCommandQueue {
     }
   }
 
+  /// Fail all pending commands with the provided error without removing them yet.
+  void failAll(Object error, [StackTrace? stackTrace]) {
+    for (final cmd in _queue) {
+      if (!cmd.isDone) {
+        cmd.markFailed(error, stackTrace);
+      }
+    }
+    removeCompleted();
+  }
+
   /// Get all pending commands (for debugging).
   List<PendingCommand> getAll() => _queue.toList();
 

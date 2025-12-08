@@ -161,7 +161,11 @@ class NpgsqlConnector {
 
       // Readers/Writers helpers
       _msgReader = PostgresMessageReader(_readBuffer!);
-      _msgWriter = PostgresMessageWriter(_writeBuffer!);
+      _msgWriter = PostgresMessageWriter(
+        _writeBuffer!,
+        useBuffer: true,
+        bufferSize: 16384,
+      );
       _frontendMessages = FrontendMessages(_msgWriter!, encoding: encoding);
       _backendReader = BackendMessageReader(_msgReader!);
 
@@ -343,6 +347,11 @@ class NpgsqlConnector {
 
       _processPipelineMessage(msg);
 
+      if (_pipelineDrainingAfterError &&
+          !_shouldDeliverWhileDraining(msg)) {
+        continue;
+      }
+
       if (msg is NotificationResponseMessage) {
         _notificationController.add(NpgsqlNotificationEventArgs(
             msg.channel, msg.payload, msg.processId));
@@ -358,6 +367,22 @@ class NpgsqlConnector {
       }
       return msg;
     }
+  }
+
+  bool _shouldDeliverWhileDraining(IBackendMessage msg) {
+    if (msg is ReadyForQueryMessage || msg is ErrorResponseMessage) {
+      return true;
+    }
+    return !(msg is ParseCompleteMessage ||
+        msg is BindCompleteMessage ||
+        msg is ParameterDescriptionMessage ||
+        msg is RowDescriptionMessage ||
+        msg is NoDataMessage ||
+        msg is DataRowMessage ||
+        msg is CommandCompleteMessage ||
+        msg is PortalSuspendedMessage ||
+      msg is CloseCompletedMessage ||
+      msg is EmptyQueryMessage);
   }
 
   Future<IBackendMessage> _readMessage() {
@@ -380,16 +405,24 @@ class NpgsqlConnector {
     }
 
     if (msg is ParseCompleteMessage || msg is BindCompleteMessage) {
+      pendingCmd.addMessage(msg);
       pendingCmd.recordResponse();
       return;
     }
 
     if (msg is RowDescriptionMessage || msg is NoDataMessage) {
+      pendingCmd.addMessage(msg);
       pendingCmd.recordResponse();
       return;
     }
 
+    if (msg is DataRowMessage) {
+      pendingCmd.addMessage(msg);
+      return;
+    }
+
     if (msg is CommandCompleteMessage) {
+      pendingCmd.addMessage(msg);
       pendingCmd.recordResponse();
       pendingCmd.markCompleted();
       _pipelineQueue!.removeCompleted();
@@ -398,30 +431,86 @@ class NpgsqlConnector {
 
     if (msg is ErrorResponseMessage) {
       final err = msg.error;
-      pendingCmd.markFailed(PostgresException(
+      final exception = PostgresException(
         severity: err.severity ?? 'ERROR',
         invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
         sqlState: err.sqlState ?? '00000',
         messageText: err.messageText ?? 'Unknown Error',
-      ));
+      );
+      pendingCmd.addMessage(msg);
+      pendingCmd.markFailed(exception);
       _pipelineQueue!.removeCompleted();
+      _pipelineQueue!.clear(exception);
+      _pipelinePendingError = exception;
+      _pipelinePendingErrorStack = StackTrace.current;
+      _autoExitPipelineOnReady = true;
+      _pipelineDrainingAfterError = true;
       return;
     }
   }
 
   void _handleReadyForQueryMessage() {
-    if (!_autoExitPipelineOnReady) {
+    final shouldExit =
+        _autoExitPipelineOnReady || _pipelinePendingError != null;
+    if (!shouldExit) {
       return;
     }
 
     _autoExitPipelineOnReady = false;
+  _pipelineDrainingAfterError = false;
+
+    final error = _pipelinePendingError;
+    final stack = _pipelinePendingErrorStack;
+    _pipelinePendingError = null;
+    _pipelinePendingErrorStack = null;
 
     if (_pipelineQueue != null) {
-      _pipelineQueue!.clear();
+      if (error != null) {
+        _pipelineQueue!.clear(error, stack);
+      } else {
+        _pipelineQueue!.clear();
+      }
       if (_pipelineQueue!.inPipelineMode) {
         _pipelineQueue!.exitPipelineMode();
       }
     }
+  }
+
+  /// Reads the next backend message belonging to the provided [PendingCommand].
+  ///
+  /// This will keep pumping the connector until the command produces a
+  /// buffered message or completes (successfully or with error). Returns `null`
+  /// once the command has no further messages to deliver.
+  Future<IBackendMessage?> readMessageForPending(PendingCommand command) async {
+    while (true) {
+      final buffered = command.takeMessage();
+      if (buffered != null) {
+        return buffered;
+      }
+      if (command.isDone) {
+        return null;
+      }
+      await readMessage();
+    }
+  }
+
+  /// Creates a data reader that consumes the results of the provided pending
+  /// pipeline commands sequentially.
+  Future<NpgsqlDataReader> createPipelineReader(List<PendingCommand> commands,
+      {bool drainReadyOnClose = true}) async {
+    if (commands.isEmpty) {
+      throw ArgumentError('commands cannot be empty');
+    }
+    final reader = NpgsqlDataReaderImpl(this,
+        pendingCommands: commands, drainReadyOnClose: drainReadyOnClose);
+    await reader.init();
+    return reader;
+  }
+
+  /// Convenience helper to create a reader for a single pending command.
+  Future<NpgsqlDataReader> createPipelineReaderForCommand(
+      PendingCommand command) {
+    return createPipelineReader([command], drainReadyOnClose: false);
   }
 
   Future<IBackendMessage> _readRawMessage() async {
@@ -589,6 +678,8 @@ class NpgsqlConnector {
       enterPipelineMode();
     }
 
+    final pendingCommands = <PendingCommand>[];
+
     try {
       for (final cmd in batch.batchCommands) {
         String sqlToExecute = cmd.commandText;
@@ -602,29 +693,27 @@ class NpgsqlConnector {
           paramsToUse.addAll(rewritten.orderedParameters);
         }
 
-        await executeQueryPipelined(
+        final pending = await executeQueryPipelined(
           sql: sqlToExecute,
           parameters: paramsToUse,
         );
+        pendingCommands.add(pending);
       }
 
       await pipelineSync();
       if (!wasInPipeline) {
-        _autoExitPipelineOnReady = true;
+        scheduleAutoExitPipelineOnReady();
       }
     } catch (e) {
       if (!wasInPipeline && inPipelineMode) {
-        _autoExitPipelineOnReady = false;
-        _pipelineQueue?.clear(e);
-        exitPipelineMode();
+        cancelAutoExitPipelineOnReady();
+        abortPipeline(e);
       }
       rethrow;
     }
 
     // Return reader
-    final reader = NpgsqlDataReaderImpl(this);
-    await reader.init();
-    return reader;
+    return createPipelineReader(pendingCommands);
   }
 
   Future<CopyResponseMessage> executeCopyCommand(String sql) async {
@@ -728,6 +817,9 @@ class NpgsqlConnector {
 
   PipelineCommandQueue? _pipelineQueue;
   bool _autoExitPipelineOnReady = false;
+  Object? _pipelinePendingError;
+  StackTrace? _pipelinePendingErrorStack;
+  bool _pipelineDrainingAfterError = false;
 
   /// Whether the connector is currently in pipeline mode.
   bool get inPipelineMode => _pipelineQueue?.inPipelineMode ?? false;
@@ -758,10 +850,10 @@ class NpgsqlConnector {
 
     // Send Sync message
     await _frontendMessages!.writeSync(flush: false);
-    if (_writeBuffer != null) {
-      await _writeBuffer!.flush();
-    } else if (_msgWriter != null) {
+    if (_msgWriter != null) {
       await _msgWriter!.flush();
+    } else if (_writeBuffer != null) {
+      await _writeBuffer!.flush();
     }
   }
 
@@ -814,6 +906,7 @@ class NpgsqlConnector {
     // Collect parameter OIDs and values
     final paramOids = <int>[];
     final paramValues = <dynamic>[];
+    final paramHandlers = <TypeHandler?>[];
 
     for (final p in params) {
       TypeHandler? handler;
@@ -825,6 +918,7 @@ class NpgsqlConnector {
       }
       paramOids.add(handler?.oid ?? 0);
       paramValues.add(p.value);
+      paramHandlers.add(handler);
     }
 
     // Write Parse if not already prepared
@@ -839,27 +933,33 @@ class NpgsqlConnector {
 
     // Write Bind
     final encodedParams = <List<int>?>[];
+    final parameterFormatCodes = <int>[];
     for (var i = 0; i < paramValues.length; i++) {
       final value = paramValues[i];
+      final handler = paramHandlers[i];
       if (value == null) {
         encodedParams.add(null);
+        parameterFormatCodes.add(0);
+      } else if (handler != null) {
+        encodedParams.add(handler.write(value));
+        parameterFormatCodes.add(1);
       } else {
-        final handler = _typeRegistry.resolveByValue(value);
-        if (handler != null) {
-          encodedParams.add(handler.write(value));
-        } else {
-          encodedParams.add(null);
-        }
+        encodedParams.add(encoding.encode(value.toString()));
+        parameterFormatCodes.add(0);
       }
     }
 
     await _frontendMessages!.writeBind(
       portalName: '',
       statementName: statementName ?? '',
+      parameterFormatCodes: parameterFormatCodes,
       parameterValues: encodedParams,
       resultFormatCodes: [1], // Binary format
       flush: false,
     );
+
+    // Write Describe to ensure RowDescription before DataRow
+    await _frontendMessages!.writeDescribePortal('', flush: false);
 
     // Write Execute
     await _frontendMessages!.writeExecute(
@@ -875,11 +975,39 @@ class NpgsqlConnector {
   /// Flush the write buffer without sending Sync.
   /// Used in pipeline mode to send accumulated commands to the server.
   Future<void> flushPipeline() async {
-    if (_writeBuffer != null) {
+    if (_msgWriter != null) {
+      await _msgWriter!.flush();
+    } else if (_writeBuffer != null) {
       await _writeBuffer!.flush();
     }
   }
 
   /// Get the current pipeline queue (for debugging/monitoring).
   PipelineCommandQueue? get pipelineQueue => _pipelineQueue;
+
+  /// Schedules automatic exit from pipeline mode once ReadyForQuery arrives.
+  void scheduleAutoExitPipelineOnReady() {
+    _autoExitPipelineOnReady = true;
+  }
+
+  /// Cancels any previously scheduled automatic exit from pipeline mode.
+  void cancelAutoExitPipelineOnReady() {
+    _autoExitPipelineOnReady = false;
+  }
+
+  /// Aborts the current pipeline, failing all pending commands and
+  /// attempting to exit pipeline mode.
+  void abortPipeline(Object error, [StackTrace? stackTrace]) {
+    _pipelineQueue?.clear(error, stackTrace);
+    _autoExitPipelineOnReady = false;
+    _pipelinePendingError = null;
+    _pipelinePendingErrorStack = null;
+    if (_pipelineQueue != null && _pipelineQueue!.inPipelineMode) {
+      try {
+        _pipelineQueue!.exitPipelineMode();
+      } catch (_) {
+        // Ignore to avoid masking original error.
+      }
+    }
+  }
 }

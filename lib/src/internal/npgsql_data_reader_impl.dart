@@ -6,25 +6,52 @@ import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
 import '../types/type_handler.dart';
 import 'npgsql_connector.dart';
+import 'pending_command.dart';
 
 class NpgsqlDataReaderImpl implements NpgsqlDataReader {
-  NpgsqlDataReaderImpl(this._connector);
+  NpgsqlDataReaderImpl(this._connector,
+      {List<PendingCommand>? pendingCommands,
+      bool drainReadyOnClose = true})
+      : _pendingCommands = pendingCommands,
+        _drainReadyOnClose = drainReadyOnClose;
 
   final NpgsqlConnector _connector;
   final TypeHandlerRegistry _typeRegistry = TypeHandlerRegistry();
+  final List<PendingCommand>? _pendingCommands;
+  final bool _drainReadyOnClose;
 
   RowDescriptionMessage? _rowDescription;
   DataRowMessage? _currentRow;
   int _recordsAffected = 0;
   bool _closed = false; // Public API closed state (user cannot read more)
   bool _drained = false; // Protocol state (ReadyForQuery received)
+  bool get _isPipelineReader => _pendingCommands != null;
+  int _pendingCommandIndex = -1;
+  PendingCommand? _currentPendingCommand;
 
   Map<String, int>? _columnMap;
 
   Future<void> init() async {
+    if (_isPipelineReader) {
+      final pendingList = _pendingCommands!;
+      if (pendingList.isEmpty) {
+        _closed = true;
+        _currentResultFinished = true;
+        return;
+      }
+      _advancePendingCommand();
+    }
+
     // Consumes messages until we get a RowDescription or CommandComplete (no rows)
     while (true) {
-      final msg = await _connector.readMessage();
+      final msg = await _getNextMessage();
+
+      if (msg == null) {
+        // Current command has already completed (no resultset)
+        _closed = true;
+        _currentResultFinished = true;
+        return;
+      }
 
       if (msg is ParseCompleteMessage || msg is BindCompleteMessage) {
         // Extended query flow
@@ -39,6 +66,10 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
       if (msg is RowDescriptionMessage) {
         _rowDescription = msg;
         break;
+      }
+      if (msg is NoDataMessage) {
+        _rowDescription = null;
+        continue;
       }
       if (msg is DataRowMessage) {
         // Should not happen before RowDescription in simple query
@@ -96,6 +127,25 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
         routine: err.routine);
   }
 
+  void _advancePendingCommand() {
+    final pendingList = _pendingCommands;
+    if (pendingList == null) return;
+    if (_pendingCommandIndex >= pendingList.length - 1) {
+      _pendingCommandIndex = pendingList.length;
+      _currentPendingCommand = null;
+      return;
+    }
+    _pendingCommandIndex++;
+    _currentPendingCommand = pendingList[_pendingCommandIndex];
+  }
+
+  Future<IBackendMessage?> _getNextMessage() async {
+    if (_currentPendingCommand != null) {
+      return _connector.readMessageForPending(_currentPendingCommand!);
+    }
+    return _connector.readMessage();
+  }
+
   @override
   int get fieldCount => _rowDescription?.fields.length ?? 0;
 
@@ -106,6 +156,38 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
   Future<void> close() async {
     // Even if _closed is true, we might need to drain the protocol
     if (_drained) return;
+
+    if (_isPipelineReader) {
+      while (true) {
+        if (_currentPendingCommand == null) {
+          _advancePendingCommand();
+          if (_currentPendingCommand == null) {
+            break;
+          }
+        }
+
+        while (true) {
+          final msg = await _getNextMessage();
+          if (msg == null) {
+            break;
+          }
+          if (msg is CommandCompleteMessage) {
+            _handleCommandComplete(msg);
+            break;
+          }
+          if (msg is ErrorResponseMessage) {
+            _handleError(msg);
+          }
+        }
+
+        _currentPendingCommand = null;
+      }
+    }
+
+    if (!_drainReadyOnClose) {
+      _closed = true;
+      return;
+    }
 
     // Drain remaining messages until ReadyForQuery
     while (true) {
@@ -183,8 +265,36 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
     _recordsAffected = 0;
     _closed = false;
 
+    if (_isPipelineReader) {
+      _advancePendingCommand();
+      if (_currentPendingCommand == null) {
+        // No more pipelined commands; drain until ReadyForQuery
+        while (true) {
+          final msg = await _connector.readMessage();
+          if (msg is ReadyForQueryMessage) {
+            _drained = true;
+            _closed = true;
+            return false;
+          }
+          if (msg is CommandCompleteMessage) {
+            _handleCommandComplete(msg);
+            continue;
+          }
+          if (msg is ErrorResponseMessage) {
+            _handleError(msg);
+          }
+        }
+      }
+    }
+
     while (true) {
-      final msg = await _connector.readMessage();
+      final msg = await _getNextMessage();
+
+      if (msg == null) {
+        _currentResultFinished = true;
+        _closed = true;
+        return false;
+      }
 
       if (msg is ReadyForQueryMessage) {
         _drained = true;
@@ -195,6 +305,11 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
       if (msg is RowDescriptionMessage) {
         _rowDescription = msg;
         return true;
+      }
+
+      if (msg is NoDataMessage) {
+        // No rows for this result; wait for CommandComplete.
+        continue;
       }
 
       if (msg is CommandCompleteMessage) {
@@ -219,8 +334,14 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
     if (_closed || _currentResultFinished) return false;
 
     while (true) {
-      final msg = await _connector.readMessage();
-      // print('DEBUG: Reader received ${msg.runtimeType}');
+      final msg = await _getNextMessage();
+
+      if (msg == null) {
+        _currentRow = null;
+        _currentResultFinished = true;
+        _closed = true;
+        return false;
+      }
 
       if (msg is DataRowMessage) {
         _currentRow = msg;
@@ -233,6 +354,11 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
         // This might be a bug in state tracking if we get here.
         _rowDescription = msg;
         _columnMap = null;
+        continue;
+      }
+
+      if (msg is NoDataMessage) {
+        // No row data upcoming; rely on CommandComplete for termination.
         continue;
       }
 

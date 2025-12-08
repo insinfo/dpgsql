@@ -8,6 +8,7 @@ use o comando rg para buscar no codigo fonte
 use o comando timeout-cli 
 timeout-cli.exe 30 dart test test\montgomery_fast_test.dart
 referencias de implementação C:\MyDartProjects\dpgsql\referencias
+implementar micro otimizações guiadas por benckmark
 
 - [x] Implement text parsing for `NpgsqlInterval` (Postgres format).
 - [x] Implement `NpgsqlParameter` properties (Precision, Scale, Size).
@@ -97,6 +98,46 @@ Progresso 2025-12-08 (Parte 24):
 - **Batch Pipeline**: `executeQueryPipelined` ficou assíncrono, garante envio sequencial e `pipelineSync()` passou a apenas disparar o `Sync` + flush, evitando consumir respostas do leitor.
 - **Pooling**: `_healthCheck` e `_resetConnection` usam timeouts curtos (100ms), prevenindo hangs com servidores mock e mantendo reaproveitamento de conexões.
 - **Testes**: `batch_test.dart`, `datasource_pool_test.dart` e `datasource_test.dart` agora passam sem timeouts; suíte completa `dart test` ✅.
+
+Progresso 2025-12-08 (Parte 25):
+- **Writer Buffer**: `NpgsqlConnector` cria `PostgresMessageWriter` com buffer de 16 KB, garantindo coalescência automática semelhante ao Npgsql original.
+- **Pipeline Flush**: `flushPipeline()` e `pipelineSync()` usam `PostgresMessageWriter.flush()`; Sync agora respeita a fila antes de enviar ao socket, evitando flush redundante.
+- **Estabilidade**: Pipeline mantém ordenação com `flushIfNeeded` e segue passando toda a suíte de testes (`dart test`).
+
+Progresso 2025-12-08 (Parte 26):
+- **Pipeline Errors**: `_processPipelineMessage` propaga `ErrorResponse` para a fila inteira (`clear` + falha dos comandos restantes) e força saída automática do modo pipeline ao receber `ReadyForQuery`.
+- **Recuperação**: `_handleReadyForQueryMessage` aplica erro pendente ao encerrar a fila, garantindo que `exitPipelineMode()` aconteça mesmo após aborts.
+- **Testes**: `batch_test.dart` ganhou cenário simulando `ErrorResponse` em pipeline (mock server), validando que a conexão se recupera e lança `PostgresException` com mensagem.
+
+Progresso 2025-12-09 (Parte 27):
+- **Streaming de Pipeline**: `PendingCommand` agora guarda mensagens em fila interna e expõe `takeMessage()`, permitindo consumo incremental sem interleaving.
+- **DataReader Pipeline-aware**: `NpgsqlDataReaderImpl` passou a consumir comandos via `readMessageForPending`, alternando entre comandos pipelined e mensagens globais (`ReadyForQuery`), com suporte a `NoData`.
+- **Batch Pipelined**: `executeBatch` coleta os `PendingCommand` emitidos e injeta no reader para permitir streaming sequencial de múltiplos comandos.
+- **Resiliência**: `PendingCommand` evita erros assíncronos não tratados ao fechar `StreamController`/`Completer`, e `NpgsqlConnector` ganhou helper `readMessageForPending` para bombear o socket sob demanda.
+- **Testes**: `batch_test.dart` roda íntegro com o novo fluxo; restante da suíte `dart test` continua passando.
+
+Progresso 2025-12-09 (Parte 28):
+- **API Pipeline Pública**: `NpgsqlConnection` expõe `executeQueryPipelined`, `flushPipeline` e criadores de reader (`getPipelineReader`, `getPipelineReaderForCommands`), permitindo consumo ordenado dos `PendingCommand` externos.
+- **Reader Configurável**: `NpgsqlDataReaderImpl` ganhou flag `drainReadyOnClose`, evitando deadlocks quando múltiplos readers consomem mesma barreira.
+- **Connector Helpers**: `NpgsqlConnector.createPipelineReader` aceita múltiplos comandos e controla o dreno de ReadyForQuery; variante single-command retorna sem aguardar `ReadyForQuery`.
+- **Teste de Integração**: `pipeline_mode_test.dart` agora valida fluxo completo (handshake, pipeline com dois SELECTs, leitura sequencial de resultados e encerramento).
+
+Progresso 2025-12-09 (Parte 29):
+- **Draining Pós-Erro**: `_processPipelineMessage` liga `_pipelineDrainingAfterError` após `ErrorResponse`, e `readMessage()` passou a descartar mensagens protocolares até o próximo `ReadyForQuery`, garantindo alinhamento com o Sync/Reset do servidor.
+- **ReadyForQuery Cleanup**: `_handleReadyForQueryMessage` desarma a drenagem e limpa pendentes com a exceção propagada, prevenindo vazamento de comandos falhos.
+- **Testes**: `batch_test.dart` agora injeta mensagens extras após erro para validar o descarte, e toda a suíte (`dart test`) permanece verde.
+
+Progresso 2025-12-09 (Parte 30):
+- **Pipeline via NpgsqlCommand**: `executeCommandsPipelined` monta e sincroniza pipelines a partir de uma lista de `NpgsqlCommand`, com auto `enterPipelineMode` e saída programada via `ReadyForQuery`.
+- **Planos de Execução**: `NpgsqlCommand` gera `NpgsqlCommandExecutionPlan`, reutilizado tanto em execuções imediatas quanto pipelined (com reescrita de parâmetros e prepared statements).
+- **Utilities do Conector**: Expostos helpers para agendar saída automática, cancelar e abortar pipelines (limpando filas e estados internos).
+- **Teste**: `pipeline_mode_test.dart` ganhou cenário cobrindo pipeline com `NpgsqlCommand` e parâmetros nomeados.
+
+Progresso 2025-12-09 (Parte 31):
+- **Validação Real**: `real_pipeline_test.dart` conecta em PostgreSQL real e cobre `executeCommandsPipelined` misturando comandos preparados e ad-hoc.
+- **Concorrência**: Teste estressa quatro conexões em paralelo, garantindo que pipelines independentes não vazam estado (`inPipelineMode` limpa ao final).
+- **Expectativas Precisando**: Casos validam retornos de `array_agg` para `List<int>` e fallback string, incluindo parsing para garantir valores corretos.
+- **Infra**: Novos helpers do conector reutilizados em `executeBatch` para padronizar auto-exit/cancel de pipeline.
 
 
 o foco é criar um driver postgresql de alto desempenho inspirado (portar) o npgsql para dart C:\MyDartProjects\npgsql\referencias\npgsql-main foque em ser mais proximo possivel da versão original npgsql ou seja mesmos nomes de classes, arquivos e metodos para facilitar diff reponda sempre em portugues continue portando o C:\MyDartProjects\npgsql\referencias\npgsql-main para dart e atualizando o C:\MyDartProjects\npgsql\TODO.md
@@ -235,9 +276,10 @@ Optimize buffer usage.
 - [x] API básica: enterPipelineMode / exitPipelineMode / pipelineSync
 - [x] Método executeQueryPipelined para envio sem await
 - [x] _sendQueryMessages para envio de Parse/Bind/Execute sem flush
-- [ ] Tratamento completo de respostas em pipeline (DataRow streaming)
-- [ ] Gestão completa de erro em pipeline (ErrorResponse + descarte até próximo Sync)
-- [ ] Integração com NpgsqlCommand para pipeline automático
+- [x] Tratamento completo de respostas em pipeline (DataRow streaming)
+- [x] Reader pipeline-aware consumindo PendingCommand (createPipelineReader)
+- [x] Gestão completa de erro em pipeline (ErrorResponse + descarte até próximo Sync)
+- [x] Integração com NpgsqlCommand para pipeline automático
 - [ ] Otimização de flush (buffer aggregation)
 
 **2. Batch API Completo**
@@ -306,6 +348,7 @@ Optimize buffer usage.
 - [ ] NpgsqlCommandBuilder (auto-gerar INSERT/UPDATE/DELETE)
 - [ ] NpgsqlMetricsOptions (observability)
 - [ ] NpgsqlLoggingConfiguration (structured logging)
+DataTable
 
 **11. Melhorias de Protocol**
 - [x] Extended Query Protocol básico (implementado)

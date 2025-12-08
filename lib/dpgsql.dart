@@ -23,6 +23,7 @@ export 'src/npgsql_binary_exporter.dart';
 export 'src/npgsql_binary_importer.dart';
 export 'src/npgsql_large_object_manager.dart';
 export 'src/npgsql_large_object_stream.dart';
+export 'src/internal/pending_command.dart';
 
 // Types
 export 'src/types/npgsql_types.dart';

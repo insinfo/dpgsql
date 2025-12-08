@@ -69,37 +69,22 @@ class NpgsqlCommand {
       throw StateError('Connection must be open');
     }
 
-    // If not prepared, we still need to rewrite if there are parameters
-    String sqlToExecute = commandText;
-    NpgsqlParameterCollection paramsToUse = parameters;
+    final plan = buildExecutionPlan();
 
-    if (_isPrepared) {
-      // Use the prepared statement
-      // We need to construct the parameter values in the correct order expected by the prepared statement
-      final orderedParams = NpgsqlParameterCollection();
-      if (_orderedParameterNames != null) {
-        for (final name in _orderedParameterNames!) {
-          // Find current value in user collection
-          final p = parameters.firstWhere((x) => x.parameterName == name);
-          orderedParams.add(p);
-        }
-      }
-
-      return connection!.executeReader(
-          sqlToExecute, // Ignored if statementName is present, but good for debug
-          parameters: orderedParams,
-          statementName: _statementName);
-    } else {
-      // Not prepared
-      if (parameters.isNotEmpty) {
-        final rewritten = SqlRewriter.rewrite(commandText, parameters);
-        sqlToExecute = rewritten.sql;
-        paramsToUse = NpgsqlParameterCollection();
-        paramsToUse.addAll(rewritten.orderedParameters);
-      }
-
-      return connection!.executeReader(sqlToExecute, parameters: paramsToUse);
+    if (connection!.inPipelineMode) {
+      final pending = await connection!.executeQueryPipelined(
+        plan.sql,
+        statementName: plan.statementName,
+        parameters: plan.parameters,
+      );
+      return connection!.getPipelineReader(pending);
     }
+
+    return connection!.executeReader(
+      plan.sql,
+      parameters: plan.parameters,
+      statementName: plan.statementName,
+    );
   }
 
   Future<int> executeNonQuery() async {
@@ -115,4 +100,60 @@ class NpgsqlCommand {
     }
     return rows;
   }
+
+  /// Builds the execution plan for this command (internal use).
+  /// Returns the SQL text to send, the ordered parameters (if any),
+  /// and the prepared statement name when applicable.
+  NpgsqlCommandExecutionPlan buildExecutionPlan() {
+    String sqlToExecute = commandText;
+    NpgsqlParameterCollection? paramsToUse;
+    String? statementName;
+
+    if (_isPrepared) {
+      statementName = _statementName;
+      sqlToExecute = _rewrittenSql ?? commandText;
+
+      if (_orderedParameterNames != null && _orderedParameterNames!.isNotEmpty) {
+        final orderedParams = NpgsqlParameterCollection();
+        for (final name in _orderedParameterNames!) {
+          final param = parameters.firstWhere(
+            (p) => p.parameterName == name,
+            orElse: () => throw StateError(
+                'Parameter @$name not found during prepared execution'),
+          );
+          orderedParams.add(param);
+        }
+        paramsToUse = orderedParams;
+      } else if (parameters.isNotEmpty) {
+        paramsToUse = NpgsqlParameterCollection()..addAll(parameters);
+      }
+    } else if (parameters.isNotEmpty) {
+      final rewritten = SqlRewriter.rewrite(commandText, parameters);
+      sqlToExecute = rewritten.sql;
+      final orderedParams = NpgsqlParameterCollection();
+      orderedParams.addAll(rewritten.orderedParameters);
+      paramsToUse = orderedParams;
+    }
+
+    return NpgsqlCommandExecutionPlan(
+      sql: sqlToExecute,
+      parameters: paramsToUse,
+      statementName: statementName,
+    );
+  }
+}
+
+/// Internal representation of an NpgsqlCommand execution plan.
+class NpgsqlCommandExecutionPlan {
+  NpgsqlCommandExecutionPlan({
+    required this.sql,
+    this.parameters,
+    this.statementName,
+  });
+
+  final String sql;
+  final NpgsqlParameterCollection? parameters;
+  final String? statementName;
+
+  bool get hasParameters => parameters != null && parameters!.isNotEmpty;
 }

@@ -11,6 +11,7 @@ import 'npgsql_connection_string_builder.dart';
 import 'isolation_level.dart';
 import 'internal/npgsql_connector.dart';
 import 'protocol/backend_messages.dart';
+import 'internal/pending_command.dart';
 
 enum ConnectionState { closed, open, connecting, executing, fetching }
 
@@ -235,8 +236,54 @@ class NpgsqlConnection {
     await _connector!.pipelineSync();
   }
 
+  /// Flushes the write buffer without sending Sync, allowing the server to
+  /// start processing commands that have already been queued.
+  Future<void> flushPipeline() async {
+    if (_connector == null) {
+      throw StateError('Connection is closed');
+    }
+    await _connector!.flushPipeline();
+  }
+
   /// Whether the connection is currently in pipeline mode.
   bool get inPipelineMode => _connector?.inPipelineMode ?? false;
+
+  /// Sends a query while in pipeline mode, returning a handle that can be used
+  /// to consume the results once available.
+  Future<PendingCommand> executeQueryPipelined(
+    String sql, {
+    NpgsqlParameterCollection? parameters,
+    String? statementName,
+  }) async {
+    if (_state != ConnectionState.open) {
+      throw StateError('Connection is not open');
+    }
+    if (_connector == null) {
+      throw StateError('Connection is closed');
+    }
+    return _connector!.executeQueryPipelined(
+      sql: sql,
+      statementName: statementName,
+      parameters: parameters,
+    );
+  }
+
+  /// Creates a data reader that streams the results of a pending pipeline command.
+  Future<NpgsqlDataReader> getPipelineReader(PendingCommand command) async {
+    if (_connector == null) {
+      throw StateError('Connection is closed');
+    }
+    return _connector!.createPipelineReaderForCommand(command);
+  }
+
+  /// Creates a reader that will iterate over multiple pending commands in order.
+  Future<NpgsqlDataReader> getPipelineReaderForCommands(
+      List<PendingCommand> commands) async {
+    if (_connector == null) {
+      throw StateError('Connection is closed');
+    }
+    return _connector!.createPipelineReader(commands);
+  }
 
   /// Execute a query with optional parameter substitution.
   /// Supports different placeholder styles: ?, @param, or $1.
@@ -303,5 +350,68 @@ class NpgsqlConnection {
     } finally {
       exitPipelineMode();
     }
+  }
+
+  /// Executes multiple [NpgsqlCommand] instances using pipeline mode, returning
+  /// a single reader that iterates over all results in order.
+  /// When [autoEnterPipeline] is true (default), the connection enters pipeline
+  /// mode automatically and schedules an automatic exit after the next
+  /// ReadyForQuery.
+  Future<NpgsqlDataReader> executeCommandsPipelined(
+    List<NpgsqlCommand> commands, {
+    bool autoEnterPipeline = true,
+  }) async {
+    if (commands.isEmpty) {
+      throw ArgumentError('commands cannot be empty');
+    }
+    if (_state != ConnectionState.open) {
+      throw StateError('Connection is not open');
+    }
+    if (_connector == null) {
+      throw StateError('Connection is closed');
+    }
+
+    final wasInPipeline = inPipelineMode;
+    if (!wasInPipeline) {
+      if (!autoEnterPipeline) {
+        throw StateError(
+            'Connection is not in pipeline mode. Set autoEnterPipeline to true or call enterPipelineMode() manually.');
+      }
+      enterPipelineMode();
+    }
+
+    final pendingCommands = <PendingCommand>[];
+
+    try {
+      for (final cmd in commands) {
+        if (cmd.connection != null && cmd.connection != this) {
+          throw StateError(
+              'Command is associated with a different connection instance');
+        }
+        cmd.connection ??= this;
+
+        final plan = cmd.buildExecutionPlan();
+        final pending = await executeQueryPipelined(
+          plan.sql,
+          parameters: plan.parameters,
+          statementName: plan.statementName,
+        );
+        pendingCommands.add(pending);
+      }
+
+      await pipelineSync();
+      if (!wasInPipeline) {
+        _connector!.scheduleAutoExitPipelineOnReady();
+      }
+    } catch (e, st) {
+      if (!wasInPipeline && inPipelineMode) {
+        _connector!.cancelAutoExitPipelineOnReady();
+        _connector!.abortPipeline(e, st);
+      }
+      rethrow;
+    }
+
+    return _connector!
+        .createPipelineReader(List.unmodifiable(pendingCommands));
   }
 }

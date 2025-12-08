@@ -141,19 +141,22 @@ class FrontendMessages {
   }
 
   /// Describe: 'D' + (byte: 'S' para statement, 'P' para portal) + nome.
-  Future<void> writeDescribeStatement(String statementName) async {
-    await _writeDescribe(_charCode('S'), statementName);
+  Future<void> writeDescribeStatement(String statementName,
+      {bool flush = true}) async {
+    await _writeDescribe(_charCode('S'), statementName, flush: flush);
   }
 
-  Future<void> writeDescribePortal(String portalName) async {
-    await _writeDescribe(_charCode('P'), portalName);
+  Future<void> writeDescribePortal(String portalName,
+      {bool flush = true}) async {
+    await _writeDescribe(_charCode('P'), portalName, flush: flush);
   }
 
-  Future<void> _writeDescribe(int target, String name) async {
+  Future<void> _writeDescribe(int target, String name,
+      {bool flush = true}) async {
     await _writer.writeMessage(_charCode('D'), (body) {
       body.writeUint8(target);
       body.writeBytes(_encodeCString(name));
-    });
+    }, flush: flush);
   }
 
   /// Execute: 'E' + portal + max rows.
