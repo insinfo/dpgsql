@@ -152,6 +152,15 @@ class _CopyStreamBinaryInput extends BinaryInput {
   }
 
   @override
+  int readInt64() {
+    if (_available < 8) throw Exception('Buffer empty');
+    // Using ByteData for easier int64 parsing from bytes
+    final bytes = Uint8List.fromList(_buffer.sublist(_offset, _offset + 8));
+    _offset += 8;
+    return ByteData.sublistView(bytes).getInt64(0, Endian.big);
+  }
+
+  @override
   List<int> readBytes(int length) {
     if (_available < length) throw Exception('Buffer empty');
     final sub = _buffer.sublist(_offset, _offset + length);

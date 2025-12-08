@@ -11,14 +11,14 @@ class JsonHandler extends TypeHandler<String> {
   int get oid => Oid.json;
 
   @override
-  String read(Uint8List buffer, {bool isText = false}) {
-    // JSON binary format is just the UTF8 string (same as text)
-    return utf8.decode(buffer);
+  String read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    return encoding.decode(buffer);
   }
 
   @override
-  Uint8List write(String value) {
-    return utf8.encode(value);
+  Uint8List write(String value, {Encoding encoding = utf8}) {
+    return Uint8List.fromList(encoding.encode(value));
   }
 }
 
@@ -29,9 +29,10 @@ class JsonbHandler extends TypeHandler<String> {
   int get oid => Oid.jsonb;
 
   @override
-  String read(Uint8List buffer, {bool isText = false}) {
+  String read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return utf8.decode(buffer);
+      return encoding.decode(buffer);
     }
     // Binary JSONB: Version (1 byte) + JSON content
     if (buffer.isEmpty) return '';
@@ -39,12 +40,12 @@ class JsonbHandler extends TypeHandler<String> {
     if (version != 1) {
       throw FormatException('Unknown JSONB version: $version');
     }
-    return utf8.decode(buffer.sublist(1));
+    return encoding.decode(buffer.sublist(1));
   }
 
   @override
-  Uint8List write(String value) {
-    final bytes = utf8.encode(value);
+  Uint8List write(String value, {Encoding encoding = utf8}) {
+    final bytes = encoding.encode(value);
     final buffer = Uint8List(bytes.length + 1);
     buffer[0] = 1; // Version 1
     buffer.setRange(1, buffer.length, bytes);

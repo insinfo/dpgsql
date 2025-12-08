@@ -15,7 +15,11 @@ abstract class BinaryInput {
   int readInt16();
 
   /// Lê um inteiro 32-bit big-endian.
+  /// Lê um inteiro 32-bit big-endian.
   int readInt32();
+
+  /// Lê um inteiro 64-bit big-endian.
+  int readInt64();
 
   /// Lê [length] bytes brutos.
   List<int> readBytes(int length);
@@ -168,6 +172,13 @@ class SocketBinaryInput implements BinaryInput {
   }
 
   @override
+  int readInt64() {
+    final chunk = _consume(8);
+    final bd = ByteData.sublistView(chunk);
+    return bd.getInt64(0, Endian.big);
+  }
+
+  @override
   List<int> readBytes(int length) {
     return _consume(length);
   }
@@ -213,6 +224,14 @@ class MemoryBinaryInput implements BinaryInput {
     final bd = ByteData.sublistView(_buffer, _offset, _offset + 4);
     _offset += 4;
     return bd.getInt32(0, Endian.big);
+  }
+
+  @override
+  int readInt64() {
+    _ensureSync(8);
+    final bd = ByteData.sublistView(_buffer, _offset, _offset + 8);
+    _offset += 8;
+    return bd.getInt64(0, Endian.big);
   }
 
   @override

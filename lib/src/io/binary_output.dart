@@ -19,6 +19,9 @@ abstract class BinaryOutput {
   /// Escreve um inteiro 32-bit big-endian.
   void writeInt32(int value);
 
+  /// Escreve um inteiro 64-bit big-endian.
+  void writeInt64(int value);
+
   /// Escreve bytes brutos.
   void writeBytes(List<int> bytes);
 
@@ -95,6 +98,14 @@ class SocketBinaryOutput implements BinaryOutput {
     ensureCapacity(bytes.length);
     _buffer.setRange(_writeOffset, _writeOffset + bytes.length, bytes);
     _writeOffset += bytes.length;
+  }
+
+  @override
+  void writeInt64(int value) {
+    ensureCapacity(8);
+    final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 8);
+    bd.setInt64(0, value, Endian.big);
+    _writeOffset += 8;
   }
 
   @override
@@ -175,6 +186,14 @@ class MemoryBinaryOutput implements BinaryOutput {
 
   /// Obtém uma view dos bytes escritos até agora.
   Uint8List toUint8List() => Uint8List.sublistView(_buffer, 0, _writeOffset);
+
+  @override
+  void writeInt64(int value) {
+    ensureCapacity(8);
+    final bd = ByteData.sublistView(_buffer, _writeOffset, _writeOffset + 8);
+    bd.setInt64(0, value, Endian.big);
+    _writeOffset += 8;
+  }
 
   @override
   Future<void> flush() async {

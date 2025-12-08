@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import '../io/binary_output.dart';
@@ -16,9 +17,10 @@ class PostgresProtocol {
 
 /// Helpers para escrever mensagens de frontend usando [PostgresMessageWriter].
 class FrontendMessages {
-  FrontendMessages(this._writer);
+  FrontendMessages(this._writer, {this.encoding = utf8});
 
   final PostgresMessageWriter _writer;
+  final Encoding encoding;
 
   /// Envia um SSLRequest (sem type code; apenas length + magic).
   Future<void> writeSslRequest() async {
@@ -207,14 +209,14 @@ class FrontendMessages {
   }
 
   Uint8List _encodeString(String value) {
-    return Uint8List.fromList(value.codeUnits); // UTF8?
+    return Uint8List.fromList(encoding.encode(value));
   }
 
   Uint8List _encodeCString(String value) {
-    final codeUnits = value.codeUnits;
-    final out = Uint8List(codeUnits.length + 1);
-    out.setRange(0, codeUnits.length, codeUnits);
-    out[codeUnits.length] = 0;
+    final bytes = encoding.encode(value);
+    final out = Uint8List(bytes.length + 1);
+    out.setRange(0, bytes.length, bytes);
+    out[bytes.length] = 0;
     return out;
   }
 
@@ -235,6 +237,32 @@ class FrontendMessages {
     await _writer.writeMessage(_charCode('f'), (body) {
       body.writeBytes(_encodeCString(message));
     });
+  }
+
+  /// Sends a Standby Status Update message to the backend.
+  /// Typically using CopyData.
+  Future<void> writeStandbyStatusUpdate({
+    required int walReceived,
+    required int walFlushed,
+    required int walApplied,
+    required DateTime timestamp,
+    bool replyRequested = false,
+  }) async {
+    // Payload: 'r' + walReceived(8) + walFlushed(8) + walApplied(8) + time(8) + replyRequested(1)
+    final msg = MemoryBinaryOutput(initialCapacity: 34); // 1+8+8+8+8+1 = 34
+    msg.writeUint8(_charCode('r'));
+    msg.writeInt64(walReceived);
+    msg.writeInt64(walFlushed);
+    msg.writeInt64(walApplied);
+
+    // Timestamp is microseconds since 2000-01-01
+    final pgEpoch = DateTime.utc(2000, 1, 1);
+    final micros = timestamp.difference(pgEpoch).inMicroseconds;
+    msg.writeInt64(micros);
+
+    msg.writeUint8(replyRequested ? 1 : 0);
+
+    await writeCopyData(msg.toUint8List());
   }
 
   int _charCode(String char) {

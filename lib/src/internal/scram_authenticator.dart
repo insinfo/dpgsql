@@ -68,8 +68,31 @@ class ScramSha256Authenticator {
     final clientProof = _xor(clientKey, clientSignature);
     final proofBase64 = base64.encode(clientProof);
 
+    // Calculate ServerSignature for later verification
+    // ServerKey = HMAC(SaltedPassword, "Server Key")
+    final serverKey = _hmac(saltedPassword, 'Server Key');
+    // ServerSignature = HMAC(ServerKey, AuthMessage)
+    final serverSignature = _hmac(serverKey, authMessage);
+    _expectedServerSignature = base64.encode(serverSignature);
+
     // Final Message: client-final-message-without-proof + ",p=" + proofBase64
     return '$clientFinalMessageWithoutProof,p=$proofBase64';
+  }
+
+  late String _expectedServerSignature;
+
+  void verifyServerSignature(String serverFinalMessage) {
+    // serverFinalMessage: v=ServerSignatureBase64
+    final parts = _parseMap(serverFinalMessage);
+    final v = parts['v'];
+    if (v == null) {
+      throw Exception(
+          'Invalid SCRAM server final message: $serverFinalMessage');
+    }
+
+    if (v != _expectedServerSignature) {
+      throw Exception('SCRAM server signature mismatch');
+    }
   }
 
   // Helpers

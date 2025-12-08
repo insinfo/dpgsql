@@ -1,12 +1,13 @@
 /// Represents a transaction transaction to be performed at a PostgreSQL database.
 /// Porting NpgsqlTransaction.cs
 import 'npgsql_connection.dart';
+import 'isolation_level.dart';
 
 class NpgsqlTransaction {
   NpgsqlTransaction(this._connection, this.isolationLevel);
 
   final NpgsqlConnection _connection;
-  final String isolationLevel; // For now just string, TODO IsolationLevel enum
+  final IsolationLevel isolationLevel;
 
   bool _isCompleted = false;
 

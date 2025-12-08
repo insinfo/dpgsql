@@ -271,7 +271,8 @@ class BackendMessageReader {
       if (len == -1) {
         columns.add(null);
       } else {
-        columns.add(Uint8List.fromList(input.readBytes(len)));
+        final bytes = input.readBytes(len);
+        columns.add(bytes is Uint8List ? bytes : Uint8List.fromList(bytes));
       }
     }
     return DataRowMessage(columns);

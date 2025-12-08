@@ -12,7 +12,9 @@ enum SslMode {
   /// Require SSL. If the server does not support SSL, the connection will fail.
   require,
 
-  // TODO: verifyCa and verifyFull require certificate validation logic
-  // verifyCa,
-  // verifyFull
+  /// Require SSL and verify the server certificate CA.
+  verifyCa,
+
+  /// Require SSL and verify the server certificate CA and hostname.
+  verifyFull
 }

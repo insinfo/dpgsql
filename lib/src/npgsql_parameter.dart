@@ -1,3 +1,5 @@
+import 'npgsql_db_type.dart';
+
 /// Represents a parameter to a NpgsqlCommand.
 /// Porting NpgsqlParameter.cs
 class NpgsqlParameter {
@@ -9,6 +11,15 @@ class NpgsqlParameter {
   /// Gets or sets the value of the parameter.
   dynamic value;
 
-  // TODO: NpgsqlDbType, DbType, Precision, Scale, Size, etc.
-  // For now, we infer type from value or use text.
+  /// Gets or sets the NpgsqlDbType of the parameter.
+  NpgsqlDbType? npgsqlDbType;
+
+  /// Gets or sets the maximum size, in bytes, of the data within the column.
+  int? size;
+
+  /// Gets or sets the maximum number of digits used to represent the Value property.
+  int? precision;
+
+  /// Gets or sets the number of decimal places to which Value is resolved.
+  int? scale;
 }

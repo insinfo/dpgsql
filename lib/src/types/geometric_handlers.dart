@@ -12,10 +12,11 @@ class PointHandler extends TypeHandler<NpgsqlPoint> {
   int get oid => Oid.point;
 
   @override
-  NpgsqlPoint read(Uint8List buffer, {bool isText = false}) {
+  NpgsqlPoint read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // (x,y)
-      final str = utf8.decode(buffer);
+      final str = encoding.decode(buffer);
       final parts = str.substring(1, str.length - 1).split(',');
       return NpgsqlPoint(double.parse(parts[0]), double.parse(parts[1]));
     }
@@ -24,7 +25,7 @@ class PointHandler extends TypeHandler<NpgsqlPoint> {
   }
 
   @override
-  Uint8List write(NpgsqlPoint value) {
+  Uint8List write(NpgsqlPoint value, {Encoding encoding = utf8}) {
     final bd = ByteData(16);
     bd.setFloat64(0, value.x);
     bd.setFloat64(8, value.y);
@@ -39,14 +40,28 @@ class BoxHandler extends TypeHandler<NpgsqlBox> {
   int get oid => Oid.box;
 
   @override
-  NpgsqlBox read(Uint8List buffer, {bool isText = false}) {
+  NpgsqlBox read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // (x1,y1),(x2,y2)
-      // Parsing text geometric types is complex due to nested parens
-      // For now, simple split might fail if numbers have commas (unlikely for standard float format)
-      // But standard format is (x,y),(x,y)
-      // TODO: Robust text parsing
-      throw UnimplementedError('Text parsing for Box not fully implemented');
+      final str = encoding.decode(buffer);
+      // Remove outer parens? Box format: (x,y),(x,y)
+      // Actually standard format in text is (x1,y1),(x2,y2) no outer parens wrapping both
+      // Wait, let's assume it is (1,2),(3,4)
+      final parts = str.split('),(');
+      if (parts.length != 2) throw FormatException('Invalid Box format: $str');
+
+      final p1Str = parts[0].replaceAll('(', '');
+      final p2Str = parts[1].replaceAll(')', '');
+
+      final p1Parts = p1Str.split(',');
+      final p2Parts = p2Str.split(',');
+
+      final p1 =
+          NpgsqlPoint(double.parse(p1Parts[0]), double.parse(p1Parts[1]));
+      final p2 =
+          NpgsqlPoint(double.parse(p2Parts[0]), double.parse(p2Parts[1]));
+      return NpgsqlBox(p1, p2);
     }
     final bd = ByteData.sublistView(buffer);
     final high = NpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
@@ -55,7 +70,7 @@ class BoxHandler extends TypeHandler<NpgsqlBox> {
   }
 
   @override
-  Uint8List write(NpgsqlBox value) {
+  Uint8List write(NpgsqlBox value, {Encoding encoding = utf8}) {
     final bd = ByteData(32);
     bd.setFloat64(0, value.upperRight.x);
     bd.setFloat64(8, value.upperRight.y);
@@ -72,9 +87,27 @@ class LSegHandler extends TypeHandler<NpgsqlLSeg> {
   int get oid => Oid.lseg;
 
   @override
-  NpgsqlLSeg read(Uint8List buffer, {bool isText = false}) {
-    if (isText)
-      throw UnimplementedError('Text parsing for LSeg not implemented');
+  NpgsqlLSeg read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      // [(x1,y1),(x2,y2)]
+      final str = encoding.decode(buffer);
+      final clean = str.substring(1, str.length - 1); // remove [ ]
+      final parts = clean.split('),(');
+      if (parts.length != 2) throw FormatException('Invalid LSeg format: $str');
+
+      final p1Str = parts[0].replaceAll('(', '');
+      final p2Str = parts[1].replaceAll(')', '');
+
+      final p1Parts = p1Str.split(',');
+      final p2Parts = p2Str.split(',');
+
+      final p1 =
+          NpgsqlPoint(double.parse(p1Parts[0]), double.parse(p1Parts[1]));
+      final p2 =
+          NpgsqlPoint(double.parse(p2Parts[0]), double.parse(p2Parts[1]));
+      return NpgsqlLSeg(p1, p2);
+    }
     final bd = ByteData.sublistView(buffer);
     final start = NpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
     final end = NpgsqlPoint(bd.getFloat64(16), bd.getFloat64(24));
@@ -82,7 +115,7 @@ class LSegHandler extends TypeHandler<NpgsqlLSeg> {
   }
 
   @override
-  Uint8List write(NpgsqlLSeg value) {
+  Uint8List write(NpgsqlLSeg value, {Encoding encoding = utf8}) {
     final bd = ByteData(32);
     bd.setFloat64(0, value.start.x);
     bd.setFloat64(8, value.start.y);
@@ -99,15 +132,22 @@ class LineHandler extends TypeHandler<NpgsqlLine> {
   int get oid => Oid.line;
 
   @override
-  NpgsqlLine read(Uint8List buffer, {bool isText = false}) {
-    if (isText)
-      throw UnimplementedError('Text parsing for Line not implemented');
+  NpgsqlLine read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      // {a,b,c}
+      final str = encoding.decode(buffer);
+      final clean = str.substring(1, str.length - 1);
+      final parts = clean.split(',');
+      return NpgsqlLine(double.parse(parts[0]), double.parse(parts[1]),
+          double.parse(parts[2]));
+    }
     final bd = ByteData.sublistView(buffer);
     return NpgsqlLine(bd.getFloat64(0), bd.getFloat64(8), bd.getFloat64(16));
   }
 
   @override
-  Uint8List write(NpgsqlLine value) {
+  Uint8List write(NpgsqlLine value, {Encoding encoding = utf8}) {
     final bd = ByteData(24);
     bd.setFloat64(0, value.a);
     bd.setFloat64(8, value.b);
@@ -123,9 +163,22 @@ class PathHandler extends TypeHandler<NpgsqlPath> {
   int get oid => Oid.path;
 
   @override
-  NpgsqlPath read(Uint8List buffer, {bool isText = false}) {
-    if (isText)
-      throw UnimplementedError('Text parsing for Path not implemented');
+  NpgsqlPath read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      // [(x,y),...] or ((x,y),...)
+      final str = encoding.decode(buffer);
+      final open = str.startsWith('[');
+      final clean = str.substring(1, str.length - 1);
+      final pointStrs = clean.split('),(');
+      final points = <NpgsqlPoint>[];
+      for (var s in pointStrs) {
+        s = s.replaceAll('(', '').replaceAll(')', '');
+        final parts = s.split(',');
+        points.add(NpgsqlPoint(double.parse(parts[0]), double.parse(parts[1])));
+      }
+      return NpgsqlPath(points, open: open);
+    }
     final bd = ByteData.sublistView(buffer);
     // Postgres docs: "1 byte for boolean (0=closed, 1=open)"
     final open = buffer[0] == 1;
@@ -141,7 +194,7 @@ class PathHandler extends TypeHandler<NpgsqlPath> {
   }
 
   @override
-  Uint8List write(NpgsqlPath value) {
+  Uint8List write(NpgsqlPath value, {Encoding encoding = utf8}) {
     final bd = ByteData(5 + value.points.length * 16);
     bd.setUint8(0, value.open ? 1 : 0);
     bd.setInt32(1, value.points.length);
@@ -162,9 +215,24 @@ class PolygonHandler extends TypeHandler<NpgsqlPolygon> {
   int get oid => Oid.polygon;
 
   @override
-  NpgsqlPolygon read(Uint8List buffer, {bool isText = false}) {
-    if (isText)
-      throw UnimplementedError('Text parsing for Polygon not implemented');
+  NpgsqlPolygon read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      // ((x,y),...)
+      final str = encoding.decode(buffer);
+      final clean = str.substring(1, str.length - 1); // remove outer ( )
+      // The Inner part is (x,y),(x,y)...
+      final inner =
+          clean.startsWith('(') ? clean.substring(1, clean.length - 1) : clean;
+      final pointStrs = inner.split('),(');
+      final points = <NpgsqlPoint>[];
+      for (var s in pointStrs) {
+        s = s.replaceAll('(', '').replaceAll(')', '');
+        final parts = s.split(',');
+        points.add(NpgsqlPoint(double.parse(parts[0]), double.parse(parts[1])));
+      }
+      return NpgsqlPolygon(points);
+    }
     final bd = ByteData.sublistView(buffer);
     final npts = bd.getInt32(0);
     final points = <NpgsqlPoint>[];
@@ -177,7 +245,7 @@ class PolygonHandler extends TypeHandler<NpgsqlPolygon> {
   }
 
   @override
-  Uint8List write(NpgsqlPolygon value) {
+  Uint8List write(NpgsqlPolygon value, {Encoding encoding = utf8}) {
     final bd = ByteData(4 + value.points.length * 16);
     bd.setInt32(0, value.points.length);
     int offset = 4;
@@ -197,9 +265,25 @@ class CircleHandler extends TypeHandler<NpgsqlCircle> {
   int get oid => Oid.circle;
 
   @override
-  NpgsqlCircle read(Uint8List buffer, {bool isText = false}) {
-    if (isText)
-      throw UnimplementedError('Text parsing for Circle not implemented');
+  NpgsqlCircle read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      // <(x,y),r>
+      final str = encoding.decode(buffer);
+      final clean = str.substring(1, str.length - 1); // remove < >
+      final commaIndex = clean.lastIndexOf(',');
+      final pointStr = clean.substring(0, commaIndex);
+      final rStr = clean.substring(commaIndex + 1);
+
+      final pStrClean =
+          pointStr.substring(1, pointStr.length - 1); // remove ( )
+      final pParts = pStrClean.split(',');
+
+      final center =
+          NpgsqlPoint(double.parse(pParts[0]), double.parse(pParts[1]));
+      final radius = double.parse(rStr);
+      return NpgsqlCircle(center, radius);
+    }
     final bd = ByteData.sublistView(buffer);
     final center = NpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
     final radius = bd.getFloat64(16);
@@ -207,7 +291,7 @@ class CircleHandler extends TypeHandler<NpgsqlCircle> {
   }
 
   @override
-  Uint8List write(NpgsqlCircle value) {
+  Uint8List write(NpgsqlCircle value, {Encoding encoding = utf8}) {
     final bd = ByteData(24);
     bd.setFloat64(0, value.center.x);
     bd.setFloat64(8, value.center.y);

@@ -7,8 +7,8 @@ import '../io/binary_output.dart';
 class PostgresMessage {
   PostgresMessage(this.typeCode, this.length, this.payload)
       : assert(length >= 4, 'length inclui os 4 bytes do próprio length'),
-        assert(payload.length == length - 4,
-            'payload precisa ter length-4 bytes');
+        assert(
+            payload.length == length - 4, 'payload precisa ter length-4 bytes');
 
   /// Código do tipo da mensagem (um byte ASCII, ex: 'R', 'K', 'Z').
   final int typeCode;
@@ -37,7 +37,9 @@ class PostgresMessageReader {
 
     final bodyLength = length - 4;
     await _input.ensureBytes(bodyLength);
-    final payload = Uint8List.fromList(_input.readBytes(bodyLength));
+    final rawPayload = _input.readBytes(bodyLength);
+    final payload =
+        (rawPayload is Uint8List) ? rawPayload : Uint8List.fromList(rawPayload);
 
     return PostgresMessage(typeCode, length, payload);
   }

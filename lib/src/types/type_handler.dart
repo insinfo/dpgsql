@@ -1,19 +1,23 @@
 import 'dart:typed_data';
 import 'dart:convert';
+import '../npgsql_db_type.dart';
 import 'oid.dart';
 import 'json_handler.dart';
 import 'geometric_handlers.dart';
 import 'range_handlers.dart';
+import 'npgsql_types.dart';
+import 'npgsql_geometric.dart';
+import 'custom_type_handlers.dart';
 
 /// Base class for handling PostgreSQL types.
 abstract class TypeHandler<T> {
   const TypeHandler();
 
   /// Reads a value of type T from the buffer.
-  T read(Uint8List buffer, {bool isText = false});
+  T read(Uint8List buffer, {bool isText = false, Encoding encoding = utf8});
 
   /// Writes a value of type T to a byte buffer.
-  Uint8List write(T value);
+  Uint8List write(T value, {Encoding encoding = utf8});
 
   /// The default OID handled by this handler.
   int get oid;
@@ -26,13 +30,14 @@ class TextHandler extends TypeHandler<String> {
   int get oid => Oid.text; // Also varchar, bpchar
 
   @override
-  String read(Uint8List buffer, {bool isText = false}) {
-    return utf8.decode(buffer);
+  String read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    return encoding.decode(buffer);
   }
 
   @override
-  Uint8List write(String value) {
-    return utf8.encode(value);
+  Uint8List write(String value, {Encoding encoding = utf8}) {
+    return Uint8List.fromList(encoding.encode(value));
   }
 }
 
@@ -43,9 +48,9 @@ class IntegerHandler extends TypeHandler<int> {
   int get oid => Oid.int4;
 
   @override
-  int read(Uint8List buffer, {bool isText = false}) {
+  int read(Uint8List buffer, {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      final str = utf8.decode(buffer);
+      final str = encoding.decode(buffer);
       return int.parse(str);
     }
     final bd = ByteData.sublistView(buffer);
@@ -56,7 +61,7 @@ class IntegerHandler extends TypeHandler<int> {
   }
 
   @override
-  Uint8List write(int value) {
+  Uint8List write(int value, {Encoding encoding = utf8}) {
     final bd = ByteData(4);
     bd.setInt32(0, value);
     return bd.buffer.asUint8List();
@@ -70,9 +75,9 @@ class BooleanHandler extends TypeHandler<bool> {
   int get oid => Oid.bool;
 
   @override
-  bool read(Uint8List buffer, {bool isText = false}) {
+  bool read(Uint8List buffer, {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      final str = utf8.decode(buffer);
+      final str = encoding.decode(buffer);
       return str == 't' || str == 'true' || str == '1';
     }
     if (buffer.isEmpty) return false;
@@ -80,7 +85,7 @@ class BooleanHandler extends TypeHandler<bool> {
   }
 
   @override
-  Uint8List write(bool value) {
+  Uint8List write(bool value, {Encoding encoding = utf8}) {
     return Uint8List.fromList([value ? 1 : 0]);
   }
 }
@@ -91,9 +96,10 @@ class FloatHandler extends TypeHandler<double> {
   int get oid => Oid.float4;
 
   @override
-  double read(Uint8List buffer, {bool isText = false}) {
+  double read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return double.parse(utf8.decode(buffer));
+      return double.parse(encoding.decode(buffer));
     }
     final bd = ByteData.sublistView(buffer);
     if (buffer.length == 4) return bd.getFloat32(0);
@@ -102,7 +108,7 @@ class FloatHandler extends TypeHandler<double> {
   }
 
   @override
-  Uint8List write(double value) {
+  Uint8List write(double value, {Encoding encoding = utf8}) {
     final bd = ByteData(4);
     bd.setFloat32(0, value);
     return bd.buffer.asUint8List();
@@ -115,9 +121,10 @@ class DoubleHandler extends TypeHandler<double> {
   int get oid => Oid.float8;
 
   @override
-  double read(Uint8List buffer, {bool isText = false}) {
+  double read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return double.parse(utf8.decode(buffer));
+      return double.parse(encoding.decode(buffer));
     }
     final bd = ByteData.sublistView(buffer);
     if (buffer.length == 8) return bd.getFloat64(0);
@@ -126,7 +133,7 @@ class DoubleHandler extends TypeHandler<double> {
   }
 
   @override
-  Uint8List write(double value) {
+  Uint8List write(double value, {Encoding encoding = utf8}) {
     final bd = ByteData(8);
     bd.setFloat64(0, value);
     return bd.buffer.asUint8List();
@@ -141,9 +148,10 @@ class TimestampHandler extends TypeHandler<DateTime> {
   static final DateTime _pgEpoch = DateTime.utc(2000, 1, 1);
 
   @override
-  DateTime read(Uint8List buffer, {bool isText = false}) {
+  DateTime read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return DateTime.parse(utf8.decode(buffer)); // Basic ISO8601 support
+      return DateTime.parse(encoding.decode(buffer)); // Basic ISO8601 support
     }
     final bd = ByteData.sublistView(buffer);
     final micros = bd.getInt64(0);
@@ -151,7 +159,7 @@ class TimestampHandler extends TypeHandler<DateTime> {
   }
 
   @override
-  Uint8List write(DateTime value) {
+  Uint8List write(DateTime value, {Encoding encoding = utf8}) {
     final diff = value.difference(_pgEpoch).inMicroseconds;
     final bd = ByteData(8);
     bd.setInt64(0, diff);
@@ -167,9 +175,10 @@ class DateHandler extends TypeHandler<DateTime> {
   static final DateTime _pgEpoch = DateTime.utc(2000, 1, 1);
 
   @override
-  DateTime read(Uint8List buffer, {bool isText = false}) {
+  DateTime read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return DateTime.parse(utf8.decode(buffer));
+      return DateTime.parse(encoding.decode(buffer));
     }
     final bd = ByteData.sublistView(buffer);
     final days = bd.getInt32(0);
@@ -177,7 +186,7 @@ class DateHandler extends TypeHandler<DateTime> {
   }
 
   @override
-  Uint8List write(DateTime value) {
+  Uint8List write(DateTime value, {Encoding encoding = utf8}) {
     final diff = value.difference(_pgEpoch).inDays;
     final bd = ByteData(4);
     bd.setInt32(0, diff);
@@ -191,7 +200,8 @@ class ByteaHandler extends TypeHandler<Uint8List> {
   int get oid => Oid.bytea;
 
   @override
-  Uint8List read(Uint8List buffer, {bool isText = false}) {
+  Uint8List read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // TODO: Parse hex format \x...
       return buffer;
@@ -200,7 +210,7 @@ class ByteaHandler extends TypeHandler<Uint8List> {
   }
 
   @override
-  Uint8List write(Uint8List value) {
+  Uint8List write(Uint8List value, {Encoding encoding = utf8}) {
     return value;
   }
 }
@@ -213,13 +223,13 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
   final TypeHandler elementHandler;
 
   @override
-  List<E> read(Uint8List buffer, {bool isText = false}) {
+  List<E> read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      // TODO: Implement text array parsing
-      throw UnimplementedError('Text array parsing not implemented');
+      final text = encoding.decode(buffer);
+      return _parseTextArray(text, encoding);
     }
     final bd = ByteData.sublistView(buffer);
-    // ... (existing binary logic) ...
     int offset = 0;
 
     if (buffer.length < 12) return <E>[];
@@ -253,7 +263,7 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
       } else {
         final elemBytes = buffer.sublist(offset, offset + len);
         offset += len;
-        elements.add(elementHandler.read(elemBytes));
+        elements.add(elementHandler.read(elemBytes, encoding: encoding));
       }
     }
 
@@ -261,19 +271,98 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
     if (ndim == 1) {
       return elements.cast<E>();
     } else {
-      // If E allows nested lists (e.g. dynamic), we reconstruct.
-      // If E is strict (e.g. int), we can't return nested list.
-      // We'll try to reconstruct and cast. If it fails, it fails.
       return _reconstructArray(elements, dims).cast<E>();
     }
   }
 
+  List<E> _parseTextArray(String text, Encoding encoding) {
+    if (text == '{}') return <E>[];
+    final result = <dynamic>[];
+    _parseArrayRecursive(text, 0, result, encoding);
+    return result.cast<E>();
+  }
+
+  int _parseArrayRecursive(
+      String text, int start, List<dynamic> currentList, Encoding encoding) {
+    var i = start;
+    if (i >= text.length || text[i] != '{') return i;
+    i++; // Skip '{'
+
+    while (i < text.length) {
+      final char = text[i];
+      if (char == '}') {
+        return i + 1;
+      } else if (char == '{') {
+        final nestedList = <dynamic>[];
+        currentList.add(nestedList);
+        i = _parseArrayRecursive(text, i, nestedList, encoding);
+      } else if (char == ',' ||
+          char == ' ' ||
+          char == '\t' ||
+          char == '\n' ||
+          char == '\r') {
+        if (char == ',')
+          i++;
+        else
+          i++;
+      } else {
+        // Element
+        if (char == '"') {
+          // Quoted
+          final buffer = StringBuffer();
+          i++;
+          while (i < text.length) {
+            if (text[i] == '"') {
+              if (i + 1 < text.length && text[i + 1] == '"') {
+                buffer.write('"');
+                i += 2;
+              } else {
+                i++;
+                break;
+              }
+            } else if (text[i] == '\\') {
+              if (i + 1 < text.length) {
+                buffer.write(text[i + 1]);
+                i += 2;
+              } else {
+                buffer.write('\\');
+                i++;
+              }
+            } else {
+              buffer.write(text[i]);
+              i++;
+            }
+          }
+          final valStr = buffer.toString();
+          currentList.add(elementHandler.read(
+              Uint8List.fromList(encoding.encode(valStr)),
+              isText: true,
+              encoding: encoding));
+        } else {
+          // Unquoted
+          final startElem = i;
+          while (i < text.length && text[i] != ',' && text[i] != '}') {
+            i++;
+          }
+          final valStr = text.substring(startElem, i);
+          if (valStr.toUpperCase() == 'NULL') {
+            currentList.add(null);
+          } else {
+            currentList.add(elementHandler.read(
+                Uint8List.fromList(encoding.encode(valStr)),
+                isText: true,
+                encoding: encoding));
+          }
+        }
+      }
+    }
+    return i;
+  }
+
   List<dynamic> _reconstructArray(List<dynamic> flat, List<int> dims) {
     if (dims.length == 1) return flat;
-
     final currentDim = dims[0];
     final remainingDims = dims.sublist(1);
-    // Calculate size of each chunk
     final chunkSize = flat.length ~/ currentDim;
 
     final result = <dynamic>[];
@@ -285,13 +374,11 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
   }
 
   @override
-  Uint8List write(List<E> value) {
-    // Calculate dimensions
+  Uint8List write(List<E> value, {Encoding encoding = utf8}) {
     final dims = <int>[];
     _calculateDims(value, dims);
 
     if (dims.isEmpty) {
-      // Empty array
       final out = ByteData(12);
       out.setInt32(0, 0);
       out.setInt32(4, 0);
@@ -313,7 +400,7 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
       out.addAll(dim.buffer.asUint8List());
     }
 
-    _writeRecursive(value, out);
+    _writeRecursive(value, out, encoding);
     return Uint8List.fromList(out);
   }
 
@@ -324,19 +411,17 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
     }
   }
 
-  void _writeRecursive(List list, List<int> out) {
+  void _writeRecursive(List list, List<int> out, Encoding encoding) {
     for (final item in list) {
       if (item is List) {
-        _writeRecursive(item, out);
+        _writeRecursive(item, out, encoding);
       } else {
         if (item == null) {
           final nullLen = ByteData(4);
           nullLen.setInt32(0, -1);
           out.addAll(nullLen.buffer.asUint8List());
         } else {
-          // We assume item matches elementHandler's type.
-          // Since elementHandler is not generic E here, we trust it or cast.
-          final bytes = elementHandler.write(item);
+          final bytes = elementHandler.write(item, encoding: encoding);
           final len = ByteData(4);
           len.setInt32(0, bytes.length);
           out.addAll(len.buffer.asUint8List());
@@ -350,15 +435,26 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
 class TypeHandlerRegistry {
   final Map<int, TypeHandler> _oidHandlers = {};
 
-  TypeHandlerRegistry() {
+  TypeHandlerRegistry({bool useNpgsqlTypes = false}) {
     register(const TextHandler());
     register(const IntegerHandler());
     register(const BooleanHandler());
     register(const FloatHandler());
     register(const DoubleHandler());
-    register(const TimestampHandler());
-    register(const DateHandler());
     register(const ByteaHandler());
+
+    if (useNpgsqlTypes) {
+      register(const NpgsqlDateHandler());
+      register(const NpgsqlTimeHandler());
+      register(const NpgsqlTimestampHandler());
+    } else {
+      register(const DateHandler());
+      register(const TimestampHandler());
+    }
+
+    register(const NpgsqlIntervalHandler());
+    register(const NpgsqlMoneyHandler());
+    register(const NpgsqlDecimalHandler());
 
     register(const JsonHandler());
     register(const JsonbHandler());
@@ -378,7 +474,7 @@ class TypeHandlerRegistry {
     register(RangeHandler<DateTime>(Oid.tstzrange, const TimestampHandler()));
     register(RangeHandler<DateTime>(Oid.daterange, const DateHandler()));
 
-    // Arrays - Register as dynamic to support nulls and nD arrays by default (e.g. for reader[0])
+    // Arrays
     register(ArrayHandler<dynamic>(Oid.int4Array, const IntegerHandler()));
     register(ArrayHandler<dynamic>(Oid.textArray, const TextHandler()));
     register(ArrayHandler<dynamic>(Oid.boolArray, const BooleanHandler()));
@@ -410,16 +506,29 @@ class TypeHandlerRegistry {
     if (value is DateTime) return _oidHandlers[Oid.timestamp];
     if (value is Uint8List) return _oidHandlers[Oid.bytea];
 
+    // Npgsql Types
+    if (value is NpgsqlDate) return _oidHandlers[Oid.date];
+    if (value is NpgsqlTime) return _oidHandlers[Oid.time];
+    if (value is NpgsqlTimestamp) return _oidHandlers[Oid.timestamp];
+    if (value is NpgsqlInterval) return _oidHandlers[Oid.interval];
+    if (value is NpgsqlMoney) return _oidHandlers[Oid.money];
+    if (value is NpgsqlDecimal) return _oidHandlers[Oid.numeric];
+
+    // Geometric Types
+    if (value is NpgsqlPoint) return _oidHandlers[Oid.point];
+    if (value is NpgsqlBox) return _oidHandlers[Oid.box];
+    if (value is NpgsqlLSeg) return _oidHandlers[Oid.lseg];
+    if (value is NpgsqlLine) return _oidHandlers[Oid.line];
+    if (value is NpgsqlPath) return _oidHandlers[Oid.path];
+    if (value is NpgsqlPolygon) return _oidHandlers[Oid.polygon];
+    if (value is NpgsqlCircle) return _oidHandlers[Oid.circle];
+
     // Arrays
     if (value is List) {
       if (value.isEmpty) {
-        // Fallback to text array? or unknown?
         return _oidHandlers[Oid.textArray];
       }
-      // Check first element to guess type
-      // TODO: Handle mixed types or nested lists better
       var first = value.first;
-      // If nested, dig down
       while (first is List && first.isNotEmpty) {
         first = first.first;
       }
@@ -441,8 +550,23 @@ class TypeHandlerRegistry {
     if (T == DateTime) return _oidHandlers[Oid.timestamp] as TypeHandler<T>?;
     if (T == Uint8List) return _oidHandlers[Oid.bytea] as TypeHandler<T>?;
 
-    // Explicit List<T> requests
-    // We create specific handlers to satisfy the TypeHandler<List<T>> requirement
+    if (T == NpgsqlDate) return _oidHandlers[Oid.date] as TypeHandler<T>?;
+    if (T == NpgsqlTime) return _oidHandlers[Oid.time] as TypeHandler<T>?;
+    if (T == NpgsqlTimestamp)
+      return _oidHandlers[Oid.timestamp] as TypeHandler<T>?;
+    if (T == NpgsqlInterval)
+      return _oidHandlers[Oid.interval] as TypeHandler<T>?;
+    if (T == NpgsqlMoney) return _oidHandlers[Oid.money] as TypeHandler<T>?;
+    if (T == NpgsqlDecimal) return _oidHandlers[Oid.numeric] as TypeHandler<T>?;
+
+    if (T == NpgsqlPoint) return _oidHandlers[Oid.point] as TypeHandler<T>?;
+    if (T == NpgsqlBox) return _oidHandlers[Oid.box] as TypeHandler<T>?;
+    if (T == NpgsqlLSeg) return _oidHandlers[Oid.lseg] as TypeHandler<T>?;
+    if (T == NpgsqlLine) return _oidHandlers[Oid.line] as TypeHandler<T>?;
+    if (T == NpgsqlPath) return _oidHandlers[Oid.path] as TypeHandler<T>?;
+    if (T == NpgsqlPolygon) return _oidHandlers[Oid.polygon] as TypeHandler<T>?;
+    if (T == NpgsqlCircle) return _oidHandlers[Oid.circle] as TypeHandler<T>?;
+
     if (T == List<int>)
       return ArrayHandler<int>(Oid.int4Array, const IntegerHandler())
           as TypeHandler<T>?;
@@ -456,7 +580,6 @@ class TypeHandlerRegistry {
       return ArrayHandler<double>(Oid.float8Array, const DoubleHandler())
           as TypeHandler<T>?;
 
-    // Nullable lists
     if (T == List<int?>)
       return ArrayHandler<int?>(Oid.int4Array, const IntegerHandler())
           as TypeHandler<T>?;
@@ -471,5 +594,80 @@ class TypeHandlerRegistry {
           as TypeHandler<T>?;
 
     return null;
+  }
+
+  TypeHandler? resolveByNpgsqlDbType(NpgsqlDbType dbType) {
+    switch (dbType) {
+      case NpgsqlDbType.bigint:
+        return _oidHandlers[Oid.int8];
+      case NpgsqlDbType.boolean:
+        return _oidHandlers[Oid.bool];
+      case NpgsqlDbType.box:
+        return _oidHandlers[Oid.box];
+      case NpgsqlDbType.bytea:
+        return _oidHandlers[Oid.bytea];
+      case NpgsqlDbType.circle:
+        return _oidHandlers[Oid.circle];
+      case NpgsqlDbType.char:
+        return _oidHandlers[Oid.bpchar];
+      case NpgsqlDbType.date:
+        return _oidHandlers[Oid.date];
+      case NpgsqlDbType.double:
+        return _oidHandlers[Oid.float8];
+      case NpgsqlDbType.integer:
+        return _oidHandlers[Oid.int4];
+      case NpgsqlDbType.json:
+        return _oidHandlers[Oid.json];
+      case NpgsqlDbType.jsonb:
+        return _oidHandlers[Oid.jsonb];
+      case NpgsqlDbType.line:
+        return _oidHandlers[Oid.line];
+      case NpgsqlDbType.lSeg:
+        return _oidHandlers[Oid.lseg];
+      case NpgsqlDbType.money:
+        return _oidHandlers[Oid.money];
+      case NpgsqlDbType.numeric:
+        return _oidHandlers[Oid.numeric];
+      case NpgsqlDbType.path:
+        return _oidHandlers[Oid.path];
+      case NpgsqlDbType.point:
+        return _oidHandlers[Oid.point];
+      case NpgsqlDbType.polygon:
+        return _oidHandlers[Oid.polygon];
+      case NpgsqlDbType.real:
+        return _oidHandlers[Oid.float4];
+      case NpgsqlDbType.smallint:
+        return _oidHandlers[Oid.int2];
+      case NpgsqlDbType.text:
+        return _oidHandlers[Oid.text];
+      case NpgsqlDbType.time:
+        return _oidHandlers[Oid.time];
+      case NpgsqlDbType.timestamp:
+        return _oidHandlers[Oid.timestamp];
+      case NpgsqlDbType.timestampTz:
+        return _oidHandlers[Oid.timestamptz];
+      case NpgsqlDbType.uuid:
+        return _oidHandlers[Oid.uuid];
+      case NpgsqlDbType.varbit:
+        return _oidHandlers[Oid.varbit];
+      case NpgsqlDbType.varchar:
+        return _oidHandlers[Oid.varchar];
+      case NpgsqlDbType.xml:
+        return _oidHandlers[Oid.xml];
+      case NpgsqlDbType.unknown:
+        return _oidHandlers[Oid.unknown];
+      case NpgsqlDbType.integerRange:
+        return resolve(Oid.int4range);
+      case NpgsqlDbType.bigIntRange:
+        return resolve(Oid.int8range);
+      case NpgsqlDbType.numRange:
+        return resolve(Oid.numrange);
+      case NpgsqlDbType.tsRange:
+        return resolve(Oid.tsrange);
+      case NpgsqlDbType.tsTzRange:
+        return resolve(Oid.tstzrange);
+      case NpgsqlDbType.dateRange:
+        return resolve(Oid.daterange);
+    }
   }
 }

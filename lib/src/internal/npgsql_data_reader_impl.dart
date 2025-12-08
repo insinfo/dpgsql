@@ -165,6 +165,9 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
   }
 
   @override
+  dynamic getValue(int ordinal) => this[ordinal];
+
+  @override
   Future<bool> nextResult() async {
     if (_drained) return false;
 

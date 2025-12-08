@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:collection';
 
-import 'ssl_mode.dart';
 import 'npgsql_connection.dart';
 import 'internal/npgsql_connector.dart';
+import 'npgsql_connection_string_builder.dart';
 
 /// Represents a source of data for Npgsql, which can be used to create connections.
 /// Typically handles connection pooling.
@@ -47,45 +47,19 @@ class NpgsqlDataSource {
   }
 
   NpgsqlConnector _createConnector() {
-    final settings = _parseConnectionString(connectionString);
+    final builder = NpgsqlConnectionStringBuilder(connectionString);
     return NpgsqlConnector(
-      host: settings['Host'] ?? 'localhost',
-      port: int.parse(settings['Port'] ?? '5432'),
-      username: settings['Username'] ?? settings['User ID'] ?? 'postgres',
-      password: settings['Password'] ?? '',
-      database: settings['Database'] ?? 'postgres',
-      sslMode: _parseSslMode(settings['SSL Mode'] ?? settings['SslMode']),
+      host: builder.host,
+      port: builder.port,
+      username: builder.username,
+      password: builder.password,
+      database: builder.database,
+      sslMode: builder.sslMode,
+      trustServerCertificate: builder.trustServerCertificate,
+      encoding: builder.encoding,
+      // Replication not exposed in standard DataSource connection strings usually,
+      // unless specific params.
     );
-  }
-
-  Map<String, String> _parseConnectionString(String connString) {
-    final map = <String, String>{};
-    final parts = connString.split(';');
-    for (final part in parts) {
-      final kv = part.split('=');
-      if (kv.length == 2) {
-        final key = kv[0].trim();
-        final value = kv[1].trim();
-        map[key] = value;
-      }
-    }
-    return map;
-  }
-
-  SslMode _parseSslMode(String? value) {
-    if (value == null) return SslMode.disable;
-    switch (value.toLowerCase()) {
-      case 'disable':
-        return SslMode.disable;
-      case 'allow':
-        return SslMode.allow;
-      case 'prefer':
-        return SslMode.prefer;
-      case 'require':
-        return SslMode.require;
-      default:
-        return SslMode.disable;
-    }
   }
 
   Future<void> dispose() async {

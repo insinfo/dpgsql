@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:dpgsql/src/types/geometric_handlers.dart';
 import 'package:dpgsql/src/types/json_handler.dart';
 import 'package:dpgsql/src/types/npgsql_geometric.dart';
 import 'package:dpgsql/src/types/npgsql_range.dart';
 import 'package:dpgsql/src/types/range_handlers.dart';
+import 'package:dpgsql/src/types/npgsql_types.dart';
 import 'package:dpgsql/src/types/type_handler.dart';
 import 'package:test/test.dart';
 
@@ -96,6 +98,83 @@ void main() {
       final read = handler.read(bytes);
       expect(read.lowerBoundInfinite, true);
       expect(read.upperBound, 5);
+    });
+  });
+
+  group('Text Array Parsing', () {
+    test('Int Array', () {
+      final handler = ArrayHandler<int>(0, const IntegerHandler());
+      final text = '{1,2,3}';
+      final bytes = utf8.encode(text);
+      final result = handler.read(Uint8List.fromList(bytes), isText: true);
+      expect(result, [1, 2, 3]);
+    });
+
+    test('Int Array with NULL', () {
+      final handler = ArrayHandler<int?>(0, const IntegerHandler());
+      final text = '{1,NULL,3}';
+      final bytes = utf8.encode(text);
+      final result = handler.read(Uint8List.fromList(bytes), isText: true);
+      expect(result, [1, null, 3]);
+    });
+
+    test('String Array', () {
+      final handler = ArrayHandler<String>(0, const TextHandler());
+      final text = '{"abc","def"}';
+      final bytes = utf8.encode(text);
+      final result = handler.read(Uint8List.fromList(bytes), isText: true);
+      expect(result, ['abc', 'def']);
+    });
+
+    test('String Array with Escapes', () {
+      final handler = ArrayHandler<String>(0, const TextHandler());
+      // "a,b", "c\"d"
+      final text = '{"a,b","c\\"d"}';
+      final bytes = utf8.encode(text);
+      final result = handler.read(Uint8List.fromList(bytes), isText: true);
+      expect(result, ['a,b', 'c"d']);
+    });
+
+    test('Nested Int Array', () {
+      final handler = ArrayHandler<dynamic>(0, const IntegerHandler());
+      final text = '{{1,2},{3,4}}';
+      final bytes = utf8.encode(text);
+      final result = handler.read(Uint8List.fromList(bytes), isText: true);
+      expect(result, [
+        [1, 2],
+        [3, 4]
+      ]);
+    });
+  });
+
+  group('NpgsqlInterval Parsing', () {
+    test('Parse full format', () {
+      final i = NpgsqlInterval.parse('1 year 2 mons 3 days 04:05:06.5');
+      // 1 year = 12 months. Total months = 14.
+      expect(i.months, 14);
+      expect(i.days, 3);
+      // 04:05:06.5 -> 4h + 5m + 6.5s
+      // 4*3600 + 5*60 + 6.5 = 14400 + 300 + 6.5 = 14706.5 seconds
+      // 14706.5 * 1000000 = 14706500000 microseconds
+      expect(i.time, 14706500000);
+    });
+
+    test('Parse partial', () {
+      final i = NpgsqlInterval.parse('1 day 01:00:00');
+      expect(i.months, 0);
+      expect(i.days, 1);
+      expect(i.time, 3600000000);
+    });
+
+    test('Parse negative', () {
+      final i = NpgsqlInterval.parse('-1 days');
+      expect(i.days, -1);
+    });
+
+    test('Parse plurals and singulars', () {
+      final i = NpgsqlInterval.parse('1 year 1 mon 1 day');
+      expect(i.months, 13);
+      expect(i.days, 1);
     });
   });
 }

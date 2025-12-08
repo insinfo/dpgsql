@@ -9,6 +9,9 @@ abstract class NpgsqlDataReader {
   /// Gets the value of the specified column.
   dynamic operator [](dynamic index);
 
+  /// Gets the value of the specified column by ordinal.
+  dynamic getValue(int ordinal);
+
   /// Gets the number of columns in the current row.
   int get fieldCount;
 

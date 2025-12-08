@@ -20,6 +20,7 @@ class SqlRewriter {
     final paramIndexMap = <String, int>{}; // Name -> Index (1-based)
 
     int index = 0;
+    int positionalIndex = 0; // For ? placeholders
     final len = sql.length;
 
     while (index < len) {
@@ -93,6 +94,30 @@ class SqlRewriter {
           sb.write(char);
           index++;
         }
+      } else if (char == '?') {
+        // Positional parameter (PHP PDO style)
+        if (paramIndexMap.isNotEmpty) {
+          // Mixing named and positional?
+          // Depending on implementation, we might want to throw or allow.
+          // Safe to throw for clarity.
+          throw Exception(
+              'Functionality of mixing named and positional parameters is not supported.');
+        }
+
+        if (positionalIndex >= parameters.length) {
+          throw Exception(
+              'No parameter defined for ? placeholder at index $index. Expected at least ${positionalIndex + 1} parameters.');
+        }
+
+        final param = parameters[positionalIndex];
+        positionalIndex++;
+
+        // Add to ordered params.
+        // For positional, each ? is a new binding in order.
+        orderedParams.add(param);
+        final paramIdx = orderedParams.length;
+        sb.write('\$$paramIdx');
+        index++;
       } else {
         sb.write(char);
         index++;

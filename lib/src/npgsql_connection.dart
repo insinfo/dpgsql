@@ -1,12 +1,16 @@
+import 'dart:async';
 import 'npgsql_batch.dart';
+import 'npgsql_notification_event_args.dart';
 import 'npgsql_binary_exporter.dart';
 import 'npgsql_binary_importer.dart';
 import 'npgsql_command.dart';
 import 'npgsql_data_reader.dart';
 import 'npgsql_parameter_collection.dart';
 import 'npgsql_transaction.dart';
-import 'ssl_mode.dart';
+import 'npgsql_connection_string_builder.dart';
+import 'isolation_level.dart';
 import 'internal/npgsql_connector.dart';
+import 'protocol/backend_messages.dart';
 
 enum ConnectionState { closed, open, connecting, executing, fetching }
 
@@ -32,6 +36,14 @@ class NpgsqlConnection {
 
   final void Function(NpgsqlConnector)? _returnToPoolAction;
 
+  Stream<NpgsqlNotificationEventArgs> get notifications =>
+      _notificationController.stream;
+  final _notificationController =
+      StreamController<NpgsqlNotificationEventArgs>.broadcast();
+
+  Stream<ErrorOrNoticeMessage> get notices => _noticeController.stream;
+  final _noticeController = StreamController<ErrorOrNoticeMessage>.broadcast();
+
   /// Opens a database connection with the property settings specified by the ConnectionString.
   Future<void> open() async {
     if (_state != ConnectionState.closed) {
@@ -41,16 +53,25 @@ class NpgsqlConnection {
     _state = ConnectionState.connecting;
 
     try {
-      final settings = _parseConnectionString(connectionString);
+      final builder = NpgsqlConnectionStringBuilder(connectionString);
 
       _connector = NpgsqlConnector(
-        host: settings['Host'] ?? 'localhost',
-        port: int.parse(settings['Port'] ?? '5432'),
-        username: settings['Username'] ?? settings['User ID'] ?? 'postgres',
-        password: settings['Password'] ?? '',
-        database: settings['Database'] ?? 'postgres',
-        sslMode: _parseSslMode(settings['SSL Mode'] ?? settings['SslMode']),
+        host: builder.host,
+        port: builder.port,
+        username: builder.username,
+        password: builder.password,
+        database: builder.database,
+        sslMode: builder.sslMode,
+        trustServerCertificate: builder.trustServerCertificate,
+        encoding: builder.encoding,
       );
+
+      _connector!.notifications.listen((e) {
+        _notificationController.add(e);
+      });
+      _connector!.notices.listen((e) {
+        _noticeController.add(e);
+      });
 
       await _connector!.open();
       _state = ConnectionState.open;
@@ -82,13 +103,33 @@ class NpgsqlConnection {
 
   /// Begins a database transaction.
   Future<NpgsqlTransaction> beginTransaction(
-      [String isolationLevel = '']) async {
+      [IsolationLevel isolationLevel = IsolationLevel.readCommitted]) async {
     if (_connector == null) throw StateError('Connection closed');
 
     // Start transaction command
     var sql = 'BEGIN';
-    if (isolationLevel.isNotEmpty) {
-      sql += ' ISOLATION LEVEL $isolationLevel';
+    if (isolationLevel != IsolationLevel.readCommitted) {
+      switch (isolationLevel) {
+        case IsolationLevel.readUncommitted:
+          sql += ' ISOLATION LEVEL READ UNCOMMITTED';
+          break;
+        case IsolationLevel.repeatableRead:
+          sql += ' ISOLATION LEVEL REPEATABLE READ';
+          break;
+        case IsolationLevel.serializable:
+          sql += ' ISOLATION LEVEL SERIALIZABLE';
+          break;
+        case IsolationLevel.snapshot:
+          // Snapshot isolation is usually REPEATABLE READ in PG, but explicit snapshot support exists?
+          // PG doesn't have "ISOLATION LEVEL SNAPSHOT". It has "REPEATABLE READ" which is snapshot isolation.
+          // But Npgsql maps Snapshot to RepeatableRead usually?
+          // Or maybe "BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ"
+          // Let's stick to standard PG levels.
+          sql += ' ISOLATION LEVEL REPEATABLE READ';
+          break;
+        default:
+          break;
+      }
     }
 
     final reader = await executeReader(sql);
@@ -109,6 +150,32 @@ class NpgsqlConnection {
   Future<void> prepare(String commandText, String statementName,
       NpgsqlParameterCollection parameters) async {
     if (_connector == null) throw StateError('Connection closed');
+
+    // Rewrite SQL to handle ? or @param -> $n
+    // Note: This changes parameter usage to be positional index based internally for the prepared statement
+    // But parameters collection passed here is used for types?
+    // This method seems to assume preparing *before* execution, so types are known?
+    // SqlRewriter usage here might be complex because we need to know WHICH params map to $1, $2.
+    // NpgsqlCommand handles this by storing the mapping.
+    // If we just prepare here, we lose the mapping unless we return it?
+    // NpgsqlConnector.prepare probably just needs the SQL and Types.
+    // If we rewrite, we get new SQL and Ordered Params.
+    // We should pass the Ordered Params to connector.prepare so it sends the correct Type OIDs.
+
+    // However, if we don't return the mapping/rewritten SQL to the caller of this method,
+    // they won't know that "SELECT ?" became "SELECT $1" and that $1 corresponds to the first parameter.
+    // This method `prepare` on Connection seems insufficient for `?` support if it doesn't return info.
+    // It's likely intended for low-level usage where SQL is already valid or NpgsqlCommand calls it.
+    // But wait, NpgsqlCommand calls `connection!.prepare(_rewrittenSql!, ...)` in step 106.
+    // So NpgsqlCommand ALREADY rewrites.
+    // Thus `NpgsqlConnection.prepare` receives ALREADY REWRITTEN SQL if called from NpgsqlCommand.
+    // So if the user calls `NpgsqlConnection.prepare` directly with `?`, it might fail unless we rewrite.
+    // But if we rewrite, we must return the new SQL/Mapping.
+    // Since the signature returns `Future<void>`, we CANNOT return the mapping.
+    // checks:
+    // IF commandText contains '?', we fail? Or we assume it's raw?
+    // Let's leave it as raw. The User should use NpgsqlCommand for smart parameter handling.
+
     await _connector!.prepare(commandText, statementName, parameters);
   }
 
@@ -138,36 +205,5 @@ class NpgsqlConnection {
     }
     // We need to implement executeBatch in NpgsqlConnector
     return _connector!.executeBatch(batch);
-  }
-
-  // TODO: Move to a proper ConnectionStringBuilder/Parser class
-  Map<String, String> _parseConnectionString(String connString) {
-    final map = <String, String>{};
-    final parts = connString.split(';');
-    for (final part in parts) {
-      final kv = part.split('=');
-      if (kv.length == 2) {
-        final key = kv[0].trim();
-        final value = kv[1].trim();
-        map[key] = value;
-      }
-    }
-    return map;
-  }
-
-  SslMode _parseSslMode(String? value) {
-    if (value == null) return SslMode.disable;
-    switch (value.toLowerCase()) {
-      case 'disable':
-        return SslMode.disable;
-      case 'allow':
-        return SslMode.allow;
-      case 'prefer':
-        return SslMode.prefer;
-      case 'require':
-        return SslMode.require;
-      default:
-        return SslMode.disable;
-    }
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:typed_data';
+import 'dart:convert';
 import 'type_handler.dart';
 import 'npgsql_range.dart';
 
@@ -10,7 +11,8 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
   final TypeHandler<T> elementHandler;
 
   @override
-  NpgsqlRange<T> read(Uint8List buffer, {bool isText = false}) {
+  NpgsqlRange<T> read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // TODO: Text parsing for ranges
       throw UnimplementedError('Text parsing for Range not implemented');
@@ -38,7 +40,7 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
       offset += 4;
       if (len != -1) {
         final elemBytes = buffer.sublist(offset, offset + len);
-        lowerBound = elementHandler.read(elemBytes);
+        lowerBound = elementHandler.read(elemBytes, encoding: encoding);
         offset += len;
       }
     }
@@ -48,7 +50,7 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
       offset += 4;
       if (len != -1) {
         final elemBytes = buffer.sublist(offset, offset + len);
-        upperBound = elementHandler.read(elemBytes);
+        upperBound = elementHandler.read(elemBytes, encoding: encoding);
         offset += len;
       }
     }
@@ -64,7 +66,7 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
   }
 
   @override
-  Uint8List write(NpgsqlRange<T> value) {
+  Uint8List write(NpgsqlRange<T> value, {Encoding encoding = utf8}) {
     if (value.isEmpty) {
       return Uint8List.fromList([0x01]);
     }
@@ -82,7 +84,7 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
       if (value.lowerBound == null) {
         throw ArgumentError('Lower bound cannot be null unless infinite');
       }
-      final bytes = elementHandler.write(value.lowerBound!);
+      final bytes = elementHandler.write(value.lowerBound!, encoding: encoding);
       final lenBytes = ByteData(4)..setInt32(0, bytes.length);
       parts.add(lenBytes.buffer.asUint8List());
       parts.add(bytes);
@@ -92,7 +94,7 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
       if (value.upperBound == null) {
         throw ArgumentError('Upper bound cannot be null unless infinite');
       }
-      final bytes = elementHandler.write(value.upperBound!);
+      final bytes = elementHandler.write(value.upperBound!, encoding: encoding);
       final lenBytes = ByteData(4)..setInt32(0, bytes.length);
       parts.add(lenBytes.buffer.asUint8List());
       parts.add(bytes);

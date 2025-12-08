@@ -18,6 +18,7 @@ import '../npgsql_batch.dart';
 import 'npgsql_data_reader_impl.dart';
 import 'scram_authenticator.dart';
 import 'sql_rewriter.dart';
+import '../npgsql_notification_event_args.dart';
 import '../ssl_mode.dart';
 
 /// Represents a connection to a PostgreSQL backend.
@@ -30,6 +31,9 @@ class NpgsqlConnector {
     this.password = '',
     this.database = 'postgres',
     this.sslMode = SslMode.disable,
+    this.trustServerCertificate = false,
+    this.encoding = utf8,
+    this.replication = false,
   });
 
   final String host;
@@ -38,6 +42,9 @@ class NpgsqlConnector {
   final String password;
   final String database;
   final SslMode sslMode;
+  final bool trustServerCertificate;
+  final Encoding encoding;
+  final bool replication;
 
   Socket? _socket;
   SocketBinaryInput? _readBuffer;
@@ -105,8 +112,21 @@ class NpgsqlConnector {
           _socket = await SecureSocket.secure(
             _socket!,
             onBadCertificate: (cert) {
-              // TODO: Implement verification based on SslMode (VerifyCA, VerifyFull)
-              return true; // Trust all for now
+              // If TrustServerCertificate is true, we always trust.
+              if (trustServerCertificate) return true;
+
+              // If SslMode is VerifyCA or VerifyFull, we expect strict validation.
+              // SecureSocket by default validates against system CAs.
+              // If we are here, validation FAILED.
+
+              // If SslMode is Allow or Prefer, we might be lenient?
+              // Npgsql docs: "Prefer: ... If SSL is used, the server certificate is validated."
+              // So if validation fails, we should reject, unless TrustServerCertificate is true.
+
+              // However, historically 'Allow' might have been loose.
+              // But standard Npgsql behavior is: if SSL is negotiated, validation happens unless TrustServerCertificate=true.
+
+              return false;
             },
           );
           // Update inputStream to the new SecureSocket
@@ -140,7 +160,7 @@ class NpgsqlConnector {
       // Readers/Writers helpers
       _msgReader = PostgresMessageReader(_readBuffer!);
       _msgWriter = PostgresMessageWriter(_writeBuffer!);
-      _frontendMessages = FrontendMessages(_msgWriter!);
+      _frontendMessages = FrontendMessages(_msgWriter!, encoding: encoding);
       _backendReader = BackendMessageReader(_msgReader!);
 
       // 3. Start Handshake
@@ -185,9 +205,15 @@ class NpgsqlConnector {
 
   Future<void> _handleStartup() async {
     // Write Startup Message
+    final params = <String, String>{};
+    if (replication) {
+      params['replication'] = 'database';
+    }
+
     await _frontendMessages!.writeStartupMessage(
       user: username,
       database: database,
+      parameters: params,
     );
 
     // Read response loop
@@ -276,7 +302,9 @@ class NpgsqlConnector {
     }
 
     if (msg is AuthenticationSASLFinalMessage) {
-      // Optional: verify server signature
+      if (_scram == null) throw StateError('SASL Final without Initial');
+      final serverMsg = utf8.decode(msg.payload);
+      _scram!.verifyServerSignature(serverMsg);
       return;
     }
 
@@ -299,11 +327,41 @@ class NpgsqlConnector {
     return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 
+  final _notificationController =
+      StreamController<NpgsqlNotificationEventArgs>.broadcast();
+  Stream<NpgsqlNotificationEventArgs> get notifications =>
+      _notificationController.stream;
+
+  final _noticeController = StreamController<ErrorOrNoticeMessage>.broadcast();
+  Stream<ErrorOrNoticeMessage> get notices => _noticeController.stream;
+
   Future<IBackendMessage> readMessage() async {
-    return _readMessage();
+    while (true) {
+      final msg = await _readRawMessage();
+
+      if (msg is NotificationResponseMessage) {
+        _notificationController.add(NpgsqlNotificationEventArgs(
+            msg.channel, msg.payload, msg.processId));
+        continue;
+      }
+      if (msg is NoticeResponseMessage) {
+        _noticeController.add(msg.notice);
+        continue;
+      }
+      if (msg is ParameterStatusMessage) {
+        _serverParameters[msg.parameter] = msg.value;
+        continue;
+      }
+      return msg;
+    }
   }
 
-  Future<IBackendMessage> _readMessage() async {
+  Future<IBackendMessage> _readMessage() {
+    // Legacy internal call, redirect to central handler to ensure we don't miss notifications
+    return readMessage();
+  }
+
+  Future<IBackendMessage> _readRawMessage() async {
     final raw = await _msgReader!.readMessage();
     return _backendReader.parse(raw);
   }
@@ -314,7 +372,13 @@ class NpgsqlConnector {
     final paramOids = <int>[];
     for (final p in parameters) {
       if (p.value != null) {
-        final handler = _typeRegistry.resolveByValue(p.value);
+        TypeHandler? handler;
+        if (p.npgsqlDbType != null) {
+          handler = _typeRegistry.resolveByNpgsqlDbType(p.npgsqlDbType!);
+        }
+        if (handler == null) {
+          handler = _typeRegistry.resolveByValue(p.value);
+        }
         paramOids.add(handler?.oid ?? 0);
       } else {
         paramOids.add(0); // Unknown/Unspecified
@@ -399,7 +463,7 @@ class NpgsqlConnector {
             values.add(handler.write(p.value));
             formatCodes.add(1); // Binary
           } else {
-            values.add(utf8.encode(p.value.toString()));
+            values.add(Uint8List.fromList(encoding.encode(p.value.toString())));
             formatCodes.add(0); // Text
           }
         }
@@ -472,7 +536,13 @@ class NpgsqlConnector {
       // Parse (Unnamed)
       final paramOids = <int>[];
       for (final p in paramsToUse) {
-        final handler = _typeRegistry.resolveByValue(p.value);
+        TypeHandler? handler;
+        if (p.npgsqlDbType != null) {
+          handler = _typeRegistry.resolveByNpgsqlDbType(p.npgsqlDbType!);
+        }
+        if (handler == null) {
+          handler = _typeRegistry.resolveByValue(p.value);
+        }
         paramOids.add(handler?.oid ?? 0);
       }
 
@@ -488,12 +558,19 @@ class NpgsqlConnector {
           values.add(null);
           formatCodes.add(0); // null
         } else {
-          final handler = _typeRegistry.resolveByValue(p.value);
+          TypeHandler? handler;
+          if (p.npgsqlDbType != null) {
+            handler = _typeRegistry.resolveByNpgsqlDbType(p.npgsqlDbType!);
+          }
+          if (handler == null) {
+            handler = _typeRegistry.resolveByValue(p.value);
+          }
+
           if (handler != null) {
             values.add(handler.write(p.value));
             formatCodes.add(1); // Binary
           } else {
-            values.add(utf8.encode(p.value.toString()));
+            values.add(Uint8List.fromList(encoding.encode(p.value.toString())));
             formatCodes.add(0); // Text
           }
         }
@@ -548,6 +625,22 @@ class NpgsqlConnector {
 
   Future<void> writeCopyData(Uint8List data) async {
     await _frontendMessages!.writeCopyData(data);
+  }
+
+  Future<void> sendStandbyStatus({
+    required int walReceived,
+    required int walFlushed,
+    required int walApplied,
+    required DateTime timestamp,
+    bool replyRequested = false,
+  }) async {
+    await _frontendMessages!.writeStandbyStatusUpdate(
+      walReceived: walReceived,
+      walFlushed: walFlushed,
+      walApplied: walApplied,
+      timestamp: timestamp,
+      replyRequested: replyRequested,
+    );
   }
 
   Future<void> writeCopyDone() async {
