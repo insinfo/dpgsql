@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:collection';
 
+import '../npgsql_batch_command.dart';
+import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
 
 /// Enum representing the state of a command in the pipeline.
@@ -75,6 +77,15 @@ class PendingCommand {
   /// Stack trace of the error.
   StackTrace? stackTrace;
 
+  /// Batch command associado (quando executado via NpgsqlBatch).
+  NpgsqlBatchCommand? batchCommand;
+
+  /// Command tag informado pelo servidor (e.g. "UPDATE 3").
+  String? commandTag;
+
+  /// Quantidade de linhas afetadas reportada pelo servidor.
+  int recordsAffected = 0;
+
   /// Mark this command as having received a response.
   void recordResponse() {
     receivedResponseCount++;
@@ -83,6 +94,10 @@ class PendingCommand {
   /// Explicitly mark the command as completed.
   void markCompleted() {
     state = CommandState.completed;
+    final batchCmd = batchCommand;
+    if (batchCmd != null) {
+      batchCmd.exception = null;
+    }
     if (!completer.isCompleted) {
       completer.complete();
     }
@@ -96,6 +111,10 @@ class PendingCommand {
     state = CommandState.failed;
     this.error = error;
     this.stackTrace = stackTrace;
+    final batchCmd = batchCommand;
+    if (batchCmd != null && error is PostgresException) {
+      batchCmd.exception = error;
+    }
     if (!_messageController.isClosed) {
       if (_messageController.hasListener) {
         _messageController.addError(error, stackTrace);

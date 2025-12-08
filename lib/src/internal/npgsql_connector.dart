@@ -3,8 +3,6 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
 
-import 'package:pointycastle/export.dart' as pc;
-
 import '../io/binary_input.dart';
 import '../io/binary_output.dart';
 import '../protocol/backend_messages.dart';
@@ -15,6 +13,8 @@ import '../npgsql_data_reader.dart';
 import '../npgsql_parameter_collection.dart';
 import '../types/type_handler.dart';
 import '../npgsql_batch.dart';
+import '../npgsql_batch_command.dart';
+import '../crypto/crypto.dart';
 import 'npgsql_data_reader_impl.dart';
 import 'scram_authenticator.dart';
 import 'sql_rewriter.dart';
@@ -189,6 +189,8 @@ class NpgsqlConnector {
       await _socket!.close();
       _socket = null;
     }
+    _readBuffer?.dispose();
+    _readBuffer = null;
     _isConnected = false;
   }
 
@@ -320,17 +322,10 @@ class NpgsqlConnector {
 
   String _computeMD5(String user, String password, Uint8List salt) {
     // MD5(MD5(password + user) + salt)
-    final d1 = pc.MD5Digest();
-    final step1 = d1.process(utf8.encode(password + user));
-    final hex1 = _toHex(step1);
-
-    final d2 = pc.MD5Digest();
-    final step2 = d2.process(Uint8List.fromList(utf8.encode(hex1) + salt));
-    return 'md5${_toHex(step2)}';
-  }
-
-  String _toHex(Uint8List bytes) {
-    return bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+    final step1 = md5(utf8.encode(password + user));
+    final hex1Bytes = utf8.encode(bytesToHex(step1));
+    final step2 = md5(Uint8List.fromList([...hex1Bytes, ...salt]));
+    return 'md5${bytesToHex(step2)}';
   }
 
   final _notificationController =
@@ -347,8 +342,7 @@ class NpgsqlConnector {
 
       _processPipelineMessage(msg);
 
-      if (_pipelineDrainingAfterError &&
-          !_shouldDeliverWhileDraining(msg)) {
+      if (_pipelineDrainingAfterError && !_shouldDeliverWhileDraining(msg)) {
         continue;
       }
 
@@ -369,6 +363,18 @@ class NpgsqlConnector {
     }
   }
 
+  int _parseRecordsAffected(String commandTag) {
+    if (commandTag.isEmpty) return 0;
+    final parts = commandTag.split(' ');
+    for (var i = parts.length - 1; i >= 0; i--) {
+      final value = int.tryParse(parts[i]);
+      if (value != null) {
+        return value;
+      }
+    }
+    return 0;
+  }
+
   bool _shouldDeliverWhileDraining(IBackendMessage msg) {
     if (msg is ReadyForQueryMessage || msg is ErrorResponseMessage) {
       return true;
@@ -381,8 +387,8 @@ class NpgsqlConnector {
         msg is DataRowMessage ||
         msg is CommandCompleteMessage ||
         msg is PortalSuspendedMessage ||
-      msg is CloseCompletedMessage ||
-      msg is EmptyQueryMessage);
+        msg is CloseCompletedMessage ||
+        msg is EmptyQueryMessage);
   }
 
   Future<IBackendMessage> _readMessage() {
@@ -424,6 +430,13 @@ class NpgsqlConnector {
     if (msg is CommandCompleteMessage) {
       pendingCmd.addMessage(msg);
       pendingCmd.recordResponse();
+      pendingCmd.commandTag = msg.commandTag;
+      pendingCmd.recordsAffected = _parseRecordsAffected(msg.commandTag);
+      final batchCmd = pendingCmd.batchCommand;
+      if (batchCmd != null) {
+        batchCmd.commandTag = msg.commandTag;
+        batchCmd.recordsAffected = pendingCmd.recordsAffected;
+      }
       pendingCmd.markCompleted();
       _pipelineQueue!.removeCompleted();
       return;
@@ -457,7 +470,7 @@ class NpgsqlConnector {
     }
 
     _autoExitPipelineOnReady = false;
-  _pipelineDrainingAfterError = false;
+    _pipelineDrainingAfterError = false;
 
     final error = _pipelinePendingError;
     final stack = _pipelinePendingErrorStack;
@@ -497,12 +510,15 @@ class NpgsqlConnector {
   /// Creates a data reader that consumes the results of the provided pending
   /// pipeline commands sequentially.
   Future<NpgsqlDataReader> createPipelineReader(List<PendingCommand> commands,
-      {bool drainReadyOnClose = true}) async {
+      {bool drainReadyOnClose = true,
+      List<NpgsqlBatchCommand>? batchCommands}) async {
     if (commands.isEmpty) {
       throw ArgumentError('commands cannot be empty');
     }
     final reader = NpgsqlDataReaderImpl(this,
-        pendingCommands: commands, drainReadyOnClose: drainReadyOnClose);
+        pendingCommands: commands,
+        drainReadyOnClose: drainReadyOnClose,
+        batchCommands: batchCommands);
     await reader.init();
     return reader;
   }
@@ -682,6 +698,10 @@ class NpgsqlConnector {
 
     try {
       for (final cmd in batch.batchCommands) {
+        cmd.commandTag = null;
+        cmd.recordsAffected = 0;
+        cmd.exception = null;
+
         String sqlToExecute = cmd.commandText;
         NpgsqlParameterCollection paramsToUse = cmd.parameters;
 
@@ -697,6 +717,7 @@ class NpgsqlConnector {
           sql: sqlToExecute,
           parameters: paramsToUse,
         );
+        pending.batchCommand = cmd;
         pendingCommands.add(pending);
       }
 
@@ -713,7 +734,10 @@ class NpgsqlConnector {
     }
 
     // Return reader
-    return createPipelineReader(pendingCommands);
+    return createPipelineReader(
+      pendingCommands,
+      batchCommands: batch.batchCommands,
+    );
   }
 
   Future<CopyResponseMessage> executeCopyCommand(String sql) async {
@@ -890,6 +914,16 @@ class NpgsqlConnector {
       statementName: statementName,
       parameters: parameters,
     );
+
+    final writer = _msgWriter;
+    if (writer != null) {
+      final buffer = writer.buffer;
+      if (buffer != null &&
+          (buffer.bufferedBytes >= buffer.maxBufferSize ||
+              buffer.messageCount >= 16)) {
+        await buffer.flush();
+      }
+    }
 
     return pendingCmd;
   }

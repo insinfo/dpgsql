@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
+import '../npgsql_batch_command.dart';
 import '../npgsql_data_reader.dart';
+import '../postgres_batch_exception.dart';
 import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
 import '../types/type_handler.dart';
@@ -11,13 +13,16 @@ import 'pending_command.dart';
 class NpgsqlDataReaderImpl implements NpgsqlDataReader {
   NpgsqlDataReaderImpl(this._connector,
       {List<PendingCommand>? pendingCommands,
-      bool drainReadyOnClose = true})
+      bool drainReadyOnClose = true,
+      List<NpgsqlBatchCommand>? batchCommands})
       : _pendingCommands = pendingCommands,
-        _drainReadyOnClose = drainReadyOnClose;
+        _drainReadyOnClose = drainReadyOnClose,
+        _batchCommands = batchCommands;
 
   final NpgsqlConnector _connector;
   final TypeHandlerRegistry _typeRegistry = TypeHandlerRegistry();
   final List<PendingCommand>? _pendingCommands;
+  final List<NpgsqlBatchCommand>? _batchCommands;
   final bool _drainReadyOnClose;
 
   RowDescriptionMessage? _rowDescription;
@@ -105,8 +110,46 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
   }
 
   void _handleError(ErrorResponseMessage msg) {
+    final pendingError = _currentPendingCommand?.error;
+    final baseException = pendingError is PostgresException
+        ? pendingError
+        : _createPostgresException(msg);
+
+    final batchCommands = _batchCommands;
+    if (batchCommands != null && batchCommands.isNotEmpty) {
+      final failing = _currentPendingCommand?.batchCommand;
+      var errorIndex = -1;
+      if (failing != null) {
+        errorIndex = batchCommands.indexOf(failing);
+      }
+      if (errorIndex == -1) {
+        final pendingList = _pendingCommands;
+        if (pendingList != null) {
+          for (var i = 0; i < pendingList.length; i++) {
+            final candidate = pendingList[i].batchCommand;
+            if (candidate == null) continue;
+            final idx = batchCommands.indexOf(candidate);
+            if (idx != -1 && pendingList[i].state == CommandState.failed) {
+              errorIndex = idx;
+              break;
+            }
+          }
+        }
+      }
+
+      throw PostgresBatchException(
+        inner: baseException,
+        commands: batchCommands,
+        errorCommandIndex: errorIndex,
+      );
+    }
+
+    throw baseException;
+  }
+
+  PostgresException _createPostgresException(ErrorResponseMessage msg) {
     final err = msg.error;
-    throw PostgresException(
+    return PostgresException(
         severity: err.severity ?? 'ERROR',
         invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
         sqlState: err.sqlState ?? '00000',

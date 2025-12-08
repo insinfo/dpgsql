@@ -6,6 +6,7 @@ export 'src/protocol/postgres_message.dart';
 export 'src/protocol/backend_messages.dart';
 export 'src/npgsql_exception.dart';
 export 'src/postgres_exception.dart';
+export 'src/postgres_batch_exception.dart';
 export 'src/npgsql_connection_string_builder.dart';
 export 'src/ssl_mode.dart';
 export 'src/isolation_level.dart';

@@ -180,6 +180,11 @@ void main() {
     // End
     expect(await reader.nextResult(), isFalse);
 
+    expect(batch.batchCommands[0].recordsAffected, 1);
+    expect(batch.batchCommands[0].commandTag, 'SELECT 1');
+    expect(batch.batchCommands[1].recordsAffected, 1);
+    expect(batch.batchCommands[1].commandTag, 'SELECT 1');
+
     await conn.close();
     await server.close();
   });
@@ -228,29 +233,8 @@ void main() {
             0,
             0
           ];
-          final dataRow = [
-            0x44,
-            0,
-            0,
-            0,
-            11,
-            0,
-            1,
-            0,
-            0,
-            0,
-            1,
-            49
-          ];
-          final cmdComplete = [
-            0x43,
-            0,
-            0,
-            0,
-            13,
-            ...('SELECT 1'.codeUnits),
-            0
-          ];
+          final dataRow = [0x44, 0, 0, 0, 11, 0, 1, 0, 0, 0, 1, 49];
+          final cmdComplete = [0x43, 0, 0, 0, 13, ...('SELECT 1'.codeUnits), 0];
           final ready = [0x5A, 0, 0, 0, 5, 0x49];
 
           client.add([
@@ -289,14 +273,26 @@ void main() {
     expect(reader[0], 1);
     expect(await reader.read(), isFalse);
 
-    await expectLater(
-      reader.nextResult(),
-      throwsA(isA<PostgresException>().having(
-        (e) => e.messageText,
-        'messageText',
-        contains('pipeline boom'),
-      )),
-    );
+    expect(batch.batchCommands[0].recordsAffected, 1);
+    expect(batch.batchCommands[0].commandTag, 'SELECT 1');
+    expect(batch.batchCommands[1].commandTag, isNull);
+    expect(batch.batchCommands[1].recordsAffected, 0);
+
+    late PostgresBatchException batchException;
+    try {
+      await reader.nextResult();
+      fail('Expected PostgresBatchException');
+    } on PostgresBatchException catch (e) {
+      batchException = e;
+    }
+
+    expect(batchException.messageText, contains('pipeline boom'));
+    expect(batchException.failedCommand?.commandText, 'SELECT boom');
+    expect(batchException.batchCommands, hasLength(2));
+    expect(batchException.batchCommands[0].exception, isNull);
+    expect(batchException.batchCommands[1].exception, isNotNull);
+    expect(batchException.batchCommands[1].recordsAffected, 0);
+    expect(batchException.errorCommandIndex, 1);
 
     await conn.close();
     await server.close();

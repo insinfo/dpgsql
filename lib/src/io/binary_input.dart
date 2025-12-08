@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'uint8_list_pool.dart';
+
 /// Leitura binária de alto nível com API síncrona (do ponto de vista do parser),
 /// mas alimentada por IO assíncrono embaixo.
 abstract class BinaryInput {
@@ -36,7 +38,8 @@ class SocketBinaryInput implements BinaryInput {
   SocketBinaryInput(
     Stream<List<int>> stream, {
     int initialCapacity = 4096,
-  }) : _buffer = Uint8List(initialCapacity) {
+  }) : _buffer = Uint8ListPool.rent(initialCapacity) {
+    _dataView = ByteData.view(_buffer.buffer);
     stream.listen(
       _onData,
       onDone: _onDone,
@@ -46,8 +49,11 @@ class SocketBinaryInput implements BinaryInput {
   }
 
   Uint8List _buffer;
+  late ByteData _dataView;
   int _readOffset = 0;
   int _writeLength = 0;
+
+  bool _disposed = false;
 
   bool _done = false;
   Object? _error;
@@ -97,23 +103,37 @@ class SocketBinaryInput implements BinaryInput {
     // Realoca crescendo a capacidade para evitar realocações frequentes.
     final unread = _writeLength - _readOffset;
     final needed = unread + data.length;
+    if (needed <= _buffer.length) {
+      // Move os dados não lidos para o início e escreve na sequência.
+      if (unread > 0) {
+        _buffer.setRange(0, unread, _buffer, _readOffset);
+      }
+      _readOffset = 0;
+      _writeLength = unread;
+      _buffer.setRange(_writeLength, _writeLength + data.length, data);
+      _writeLength += data.length;
+      return;
+    }
     var newCapacity = _buffer.length * 2;
     if (newCapacity < needed) {
       newCapacity = needed;
     }
-    final newBuffer = Uint8List(newCapacity);
+    final newBuffer = Uint8ListPool.rent(newCapacity);
 
     if (unread > 0) {
-      newBuffer.setRange(0, unread, _buffer.sublist(_readOffset, _writeLength));
+      newBuffer.setRange(0, unread, _buffer, _readOffset);
     }
     newBuffer.setRange(unread, unread + data.length, data);
 
+    final oldBuffer = _buffer;
     _buffer = newBuffer;
+    _dataView = ByteData.view(_buffer.buffer);
     _readOffset = 0;
     _writeLength = unread + data.length;
+    Uint8ListPool.release(oldBuffer);
   }
 
-  Uint8List _consume(int length) {
+  int _consumeOffset(int length) {
     if (length < 0) {
       throw ArgumentError.value(length, 'length', 'Deve ser >= 0');
     }
@@ -122,8 +142,7 @@ class SocketBinaryInput implements BinaryInput {
           'Buffer interno menor que o esperado: $_available < $length');
     }
 
-    final view =
-        Uint8List.sublistView(_buffer, _readOffset, _readOffset + length);
+    final startOffset = _readOffset;
     _readOffset += length;
 
     // Se consumiu tudo, reseta os ponteiros para liberar espaço.
@@ -132,13 +151,17 @@ class SocketBinaryInput implements BinaryInput {
       _writeLength = 0;
     }
 
-    return view;
+    return startOffset;
   }
 
   @override
   Future<void> ensureBytes(int count) async {
     if (count < 0) {
       throw ArgumentError.value(count, 'count', 'Deve ser >= 0');
+    }
+
+    if (_disposed) {
+      throw StateError('SocketBinaryInput já foi liberado');
     }
 
     await _checkForError();
@@ -158,48 +181,61 @@ class SocketBinaryInput implements BinaryInput {
 
   @override
   int readUint8() {
-    final chunk = _consume(1);
-    return chunk[0];
+    final offset = _consumeOffset(1);
+    return _buffer[offset];
   }
 
   @override
   int readInt16() {
-    final chunk = _consume(2);
-    final bd = ByteData.sublistView(chunk);
-    return bd.getInt16(0, Endian.big);
+    final offset = _consumeOffset(2);
+    return _dataView.getInt16(offset, Endian.big);
   }
 
   @override
   int readUint16() {
-    final chunk = _consume(2);
-    final bd = ByteData.sublistView(chunk);
-    return bd.getUint16(0, Endian.big);
+    final offset = _consumeOffset(2);
+    return _dataView.getUint16(offset, Endian.big);
   }
 
   @override
   int readInt32() {
-    final chunk = _consume(4);
-    final bd = ByteData.sublistView(chunk);
-    return bd.getInt32(0, Endian.big);
+    final offset = _consumeOffset(4);
+    return _dataView.getInt32(offset, Endian.big);
   }
 
   @override
   int readUint32() {
-    final chunk = _consume(4);
-    final bd = ByteData.sublistView(chunk);
-    return bd.getUint32(0, Endian.big);
+    final offset = _consumeOffset(4);
+    return _dataView.getUint32(offset, Endian.big);
   }
 
   @override
   int readInt64() {
-    final chunk = _consume(8);
-    final bd = ByteData.sublistView(chunk);
-    return bd.getInt64(0, Endian.big);
+    final offset = _consumeOffset(8);
+    return _dataView.getInt64(offset, Endian.big);
   }
 
   @override
   List<int> readBytes(int length) {
-    return _consume(length);
+    if (_disposed) {
+      throw StateError('SocketBinaryInput já foi liberado');
+    }
+    final offset = _consumeOffset(length);
+    return Uint8List.sublistView(_buffer, offset, offset + length);
+  }
+
+  /// Libera o buffer atual de volta ao pool. Deve ser chamado quando o input
+  /// não for mais utilizado.
+  void dispose() {
+    if (_disposed) {
+      return;
+    }
+    _disposed = true;
+    Uint8ListPool.release(_buffer);
+    _buffer = Uint8List(0);
+    _dataView = ByteData(0);
+    _readOffset = 0;
+    _writeLength = 0;
   }
 }
 

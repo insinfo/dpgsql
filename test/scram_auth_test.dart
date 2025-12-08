@@ -3,7 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:dpgsql/dpgsql.dart';
-import 'package:pointycastle/export.dart';
+import 'package:dpgsql/src/crypto/crypto.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -162,13 +162,9 @@ List<int> _int32(int value) {
 }
 
 Uint8List _hi(String password, Uint8List salt, int iterations) {
-  final mac = HMac(SHA256Digest(), 64);
-  final pkcs = PBKDF2KeyDerivator(mac)
-    ..init(Pbkdf2Parameters(salt, iterations, 32));
-  return pkcs.process(utf8.encode(password));
+  return pbkdf2HmacSha256(utf8.encode(password), salt, iterations, 32);
 }
 
 Uint8List _hmac(Uint8List key, String data) {
-  final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(key));
-  return hmac.process(utf8.encode(data));
+  return hmacSha256(key, utf8.encode(data));
 }

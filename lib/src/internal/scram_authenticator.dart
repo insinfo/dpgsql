@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'dart:typed_data';
 
-import 'package:pointycastle/export.dart';
+import '../crypto/crypto.dart';
 
 class ScramSha256Authenticator {
   ScramSha256Authenticator(this.username, this.password);
@@ -119,22 +119,15 @@ class ScramSha256Authenticator {
   }
 
   Uint8List _hi(String password, Uint8List salt, int iterations) {
-    // PBKDF2 with HMAC-SHA256
-    final mac = HMac(SHA256Digest(), 64);
-    final pkcs = PBKDF2KeyDerivator(mac)
-      ..init(Pbkdf2Parameters(salt, iterations, 32)); // 32 bytes for SHA256
-
-    return pkcs.process(utf8.encode(password));
+    return pbkdf2HmacSha256(utf8.encode(password), salt, iterations, 32);
   }
 
   Uint8List _hmac(Uint8List key, String data) {
-    final hmac = HMac(SHA256Digest(), 64)..init(KeyParameter(key));
-    return hmac.process(utf8.encode(data));
+    return hmacSha256(key, utf8.encode(data));
   }
 
   Uint8List _h(Uint8List data) {
-    final digest = SHA256Digest();
-    return digest.process(data);
+    return sha256(data);
   }
 
   Uint8List _xor(Uint8List a, Uint8List b) {

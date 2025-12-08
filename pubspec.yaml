@@ -7,11 +7,10 @@ repository: https://github.com/insinfo/dpgsql
 environment:
   sdk: '>=3.6.0 <4.0.0'
     
-dependencies:  
-  galileo_utf: ^3.0.0
-  pointycastle: ^4.0.0
-  tuple: ^2.0.2
+dependencies:
+  # No external runtime dependencies.
 
 dev_dependencies:
   test: any
+  postgres: any
 

@@ -139,6 +139,25 @@ Progresso 2025-12-09 (Parte 31):
 - **Expectativas Precisando**: Casos validam retornos de `array_agg` para `List<int>` e fallback string, incluindo parsing para garantir valores corretos.
 - **Infra**: Novos helpers do conector reutilizados em `executeBatch` para padronizar auto-exit/cancel de pipeline.
 
+Progresso 2025-12-09 (Parte 32):
+- **Buffer Aggregation**: `executeQueryPipelined` agora monitora bytes/mensagens no `WriteBuffer` e força flush oportuno (>= maxBufferSize ou 16 mensagens), reduzindo syscalls sem atrasar respostas.
+- **Describe Controlado**: `FrontendMessages.writeDescribePortal/Statement` recebeu parâmetro `flush`, permitindo sequências Parse/Bind/Describe/Execute compactadas.
+- **Verificação**: Testes `pipeline_mode_test.dart`, `real_pipeline_test.dart` e a suíte completa `dart test` foram executados após a otimização, garantindo estabilidade.
+- **Roadmap**: Item "Otimização de flush (buffer aggregation)" marcado como concluído.
+
+Progresso 2025-12-09 (Parte 33):
+- **SocketBinaryInput**: `_consume` reescrito para acessar o buffer via `ByteData` reutilizável, evitando alocações temporárias a cada leitura multi-byte.
+- **Compaction**: `_appendData` agora realinha dados não lidos no próprio buffer quando há capacidade, reduzindo realocações e cópias de grandes blocos.
+- **Leitura Raw**: `readBytes` passou a retornar views (`Uint8List.sublistView`) sobre o buffer interno, mantendo zero-copy para consumidores de payload binário.
+- **Testes**: `dart test` completo executado com sucesso (`00:07 +81 ~2: All tests passed!`).
+
+Progresso 2025-12-09 (Parte 34):
+- **Batch Errors**: `PostgresBatchException` criado para relatar falhas parciais com snapshot dos comandos e índice da falha.
+- **Comandos**: `NpgsqlBatchCommand` registra exceção associada e `PendingCommand` propaga sucesso/erro para o comando correspondente.
+- **Reader**: `NpgsqlDataReaderImpl` converte `ErrorResponse` em `PostgresBatchException`, preservando resultados prévios ao erro.
+- **Pooling**: `SocketBinaryInput` passou a alocar buffers via `Uint8ListPool`, liberando-os no fechamento da conexão.
+- **Testes**: `batch_test.dart` valida exceção agregada e estado dos comandos; suíte `dart test` executada com sucesso (`00:09 +81 ~2: All tests passed!`).
+
 
 o foco é criar um driver postgresql de alto desempenho inspirado (portar) o npgsql para dart C:\MyDartProjects\npgsql\referencias\npgsql-main foque em ser mais proximo possivel da versão original npgsql ou seja mesmos nomes de classes, arquivos e metodos para facilitar diff reponda sempre em portugues continue portando o C:\MyDartProjects\npgsql\referencias\npgsql-main para dart e atualizando o C:\MyDartProjects\npgsql\TODO.md
 
@@ -280,15 +299,15 @@ Optimize buffer usage.
 - [x] Reader pipeline-aware consumindo PendingCommand (createPipelineReader)
 - [x] Gestão completa de erro em pipeline (ErrorResponse + descarte até próximo Sync)
 - [x] Integração com NpgsqlCommand para pipeline automático
-- [ ] Otimização de flush (buffer aggregation)
+- [x] Otimização de flush (buffer aggregation)
 
 **2. Batch API Completo**
 - [x] NpgsqlBatch básico (existente mas precisa integração com pipeline)
 - [x] Executar batch usando pipeline internamente
 - [x] executeBatchPipelined() convenience method
 - [x] flushPipeline() para buffer aggregation
-- [ ] Mapear respostas individuais de cada comando no batch
-- [ ] Tratamento de erros parciais em batch
+- [x] Mapear respostas individuais de cada comando no batch
+- [x] Tratamento de erros parciais em batch
 - [ ] Suporte a múltiplos result sets por batch
 
 **3. Prepared Statement Cache Avançado**
@@ -311,10 +330,10 @@ Optimize buffer usage.
 
 **5. I/O Otimizado**
 - [x] SocketBinaryInput com buffer (implementado)
-- [ ] Eliminar cópias desnecessárias em _consume
+- [x] Eliminar cópias desnecessárias em _consume
 - [ ] Buffer de escrita agregado (acumular mensagens antes de flush)
 - [ ] flush() controlado para batching
-- [ ] Reuso de Uint8List/ByteData (object pooling)
+- [x] Reuso de Uint8List/ByteData (object pooling)
 
 **6. Representação de Dados Eficiente**
 - [ ] PgRow com view sobre buffer (sem Map por linha)
