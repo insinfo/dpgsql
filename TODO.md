@@ -220,17 +220,20 @@ Optimize buffer usage.
 
 **2. Batch API Completo**
 - [x] NpgsqlBatch básico (existente mas precisa integração com pipeline)
-- [ ] Executar batch usando pipeline internamente
+- [x] Executar batch usando pipeline internamente
+- [x] executeBatchPipelined() convenience method
+- [x] flushPipeline() para buffer aggregation
 - [ ] Mapear respostas individuais de cada comando no batch
 - [ ] Tratamento de erros parciais em batch
 - [ ] Suporte a múltiplos result sets por batch
 
 **3. Prepared Statement Cache Avançado**
 - [x] PreparedStatementManager básico (implementado)
-- [ ] Auto-prepare após N execuções (threshold configurável)
+- [x] Auto-prepare após N execuções (threshold configurável)
+- [x] LRU tracking (lastUsed timestamp)
+- [x] Métricas de hit/miss do cache
 - [ ] LRU eviction quando cache atinge limite
 - [ ] Integração com pool de conexões (cache por conexão)
-- [ ] Métricas de hit/miss do cache
 
 **4. Pool de Conexões Robusto**
 - [x] Pool básico em NpgsqlDataSource (implementado)

@@ -161,8 +161,10 @@ class PreparedStatementManager {
         existing.doParametersMatch(parameterOids)) {
       existing.refreshLastUsed();
       existing.usages++;
+      _recordHit();
       return existing;
     }
+    _recordMiss();
     return null;
   }
 
@@ -204,10 +206,15 @@ class PreparedStatementManager {
         return existing;
       }
 
-      return existing.isPrepared ? existing : null;
+      if (existing.isPrepared) {
+        _recordHit();
+        return existing;
+      }
+      return null;
     }
 
     // Create new candidate
+    _recordMiss();
     final ps = PreparedStatement.createAutoPrepareCandidate(
       manager: this,
       sql: sql,
@@ -225,5 +232,34 @@ class PreparedStatementManager {
     bySql.clear();
     autoPrepared.clear();
     numPrepared = 0;
+  }
+
+  // Cache Metrics
+
+  int _cacheHits = 0;
+  int _cacheMisses = 0;
+
+  /// Number of cache hits (statement found and reused).
+  int get cacheHits => _cacheHits;
+
+  /// Number of cache misses (statement not found).
+  int get cacheMisses => _cacheMisses;
+
+  /// Hit rate (percentage of requests that hit the cache).
+  double get hitRate {
+    final total = _cacheHits + _cacheMisses;
+    return total == 0 ? 0.0 : _cacheHits / total;
+  }
+
+  /// Record a cache hit.
+  void _recordHit() => _cacheHits++;
+
+  /// Record a cache miss.
+  void _recordMiss() => _cacheMisses++;
+
+  /// Reset metrics.
+  void resetMetrics() {
+    _cacheHits = 0;
+    _cacheMisses = 0;
   }
 }

@@ -522,79 +522,42 @@ class NpgsqlConnector {
       throw ArgumentError('Batch cannot be empty');
     }
 
-    // Pipeline all commands
-    for (final cmd in batch.batchCommands) {
-      // Rewrite SQL if needed
-      String sqlToExecute = cmd.commandText;
-      NpgsqlParameterCollection paramsToUse = cmd.parameters;
-
-      if (cmd.parameters.isNotEmpty) {
-        final rewritten = SqlRewriter.rewrite(cmd.commandText, cmd.parameters);
-        sqlToExecute = rewritten.sql;
-        paramsToUse = NpgsqlParameterCollection();
-        paramsToUse.addAll(rewritten.orderedParameters);
-      }
-
-      // Parse (Unnamed)
-      final paramOids = <int>[];
-      for (final p in paramsToUse) {
-        TypeHandler? handler;
-        if (p.npgsqlDbType != null) {
-          handler = _typeRegistry.resolveByNpgsqlDbType(p.npgsqlDbType!);
-        }
-        if (handler == null) {
-          handler = _typeRegistry.resolveByValue(p.value);
-        }
-        paramOids.add(handler?.oid ?? 0);
-      }
-
-      await _frontendMessages!
-          .writeParse(query: sqlToExecute, parameterTypeOids: paramOids);
-
-      // Bind (Unnamed Portal -> Unnamed Statement)
-      final values = <Uint8List?>[];
-      final formatCodes = <int>[];
-
-      for (final p in paramsToUse) {
-        if (p.value == null) {
-          values.add(null);
-          formatCodes.add(0); // null
-        } else {
-          TypeHandler? handler;
-          if (p.npgsqlDbType != null) {
-            handler = _typeRegistry.resolveByNpgsqlDbType(p.npgsqlDbType!);
-          }
-          if (handler == null) {
-            handler = _typeRegistry.resolveByValue(p.value);
-          }
-
-          if (handler != null) {
-            values.add(handler.write(p.value));
-            formatCodes.add(1); // Binary
-          } else {
-            values.add(Uint8List.fromList(encoding.encode(p.value.toString())));
-            formatCodes.add(0); // Text
-          }
-        }
-      }
-
-      await _frontendMessages!.writeBind(
-        portalName: '',
-        statementName: '',
-        parameterValues: values,
-        parameterFormatCodes: formatCodes,
-        resultFormatCodes: [1], // Request Binary results
-      );
-
-      // Describe Portal (Unnamed)
-      await _frontendMessages!.writeDescribePortal('');
-
-      // Execute (Unnamed Portal)
-      await _frontendMessages!.writeExecute();
+    // Use pipeline mode for efficient batch execution
+    final wasInPipeline = inPipelineMode;
+    if (!wasInPipeline) {
+      enterPipelineMode();
     }
 
-    // Sync at the end
-    await _frontendMessages!.writeSync();
+    try {
+      for (final cmd in batch.batchCommands) {
+        String sqlToExecute = cmd.commandText;
+        NpgsqlParameterCollection paramsToUse = cmd.parameters;
+
+        if (cmd.parameters.isNotEmpty) {
+          final rewritten =
+              SqlRewriter.rewrite(cmd.commandText, cmd.parameters);
+          sqlToExecute = rewritten.sql;
+          paramsToUse = NpgsqlParameterCollection();
+          paramsToUse.addAll(rewritten.orderedParameters);
+        }
+
+        executeQueryPipelined(
+          sql: sqlToExecute,
+          parameters: paramsToUse,
+        );
+      }
+
+      await pipelineSync();
+
+      if (!wasInPipeline) {
+        exitPipelineMode();
+      }
+    } catch (e) {
+      if (!wasInPipeline && inPipelineMode) {
+        exitPipelineMode();
+      }
+      rethrow;
+    }
 
     // Return reader
     final reader = NpgsqlDataReaderImpl(this);
@@ -866,4 +829,15 @@ class NpgsqlConnector {
     // Note: We do NOT send Sync or flush here
     // The caller must call pipelineSync() when ready
   }
+
+  /// Flush the write buffer without sending Sync.
+  /// Used in pipeline mode to send accumulated commands to the server.
+  Future<void> flushPipeline() async {
+    if (_writeBuffer != null) {
+      await _writeBuffer!.flush();
+    }
+  }
+
+  /// Get the current pipeline queue (for debugging/monitoring).
+  PipelineCommandQueue? get pipelineQueue => _pipelineQueue;
 }

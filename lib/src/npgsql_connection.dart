@@ -237,4 +237,22 @@ class NpgsqlConnection {
 
   /// Whether the connection is currently in pipeline mode.
   bool get inPipelineMode => _connector?.inPipelineMode ?? false;
+
+  /// Execute multiple commands efficiently using pipeline mode.
+  /// This is a convenience wrapper that enters/exits pipeline automatically.
+  Future<void> executeBatchPipelined(List<String> sqlCommands) async {
+    if (_state != ConnectionState.open) {
+      throw StateError('Connection is not open');
+    }
+
+    enterPipelineMode();
+    try {
+      for (final sql in sqlCommands) {
+        _connector!.executeQueryPipelined(sql: sql);
+      }
+      await pipelineSync();
+    } finally {
+      exitPipelineMode();
+    }
+  }
 }
