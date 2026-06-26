@@ -6,35 +6,35 @@ void main() {
     expect(_pdoStyleExample, isA<Function>());
   });
 
-  test('Existing custom types NpgsqlInterval, NpgsqlDate, NpgsqlTime', () {
-    // NpgsqlInterval already exists and works well
-    final interval = NpgsqlInterval.parse('1 year 2 mons 3 days');
+  test('Existing custom types DpgsqlInterval, DpgsqlDate, DpgsqlTime', () {
+    // DpgsqlInterval already exists and works well
+    final interval = DpgsqlInterval.parse('1 year 2 mons 3 days');
     expect(interval.months, 14); // 12 + 2
 
-    // NpgsqlDate (existing raw format)
-    final date = NpgsqlDate(100); // 100 days since 2000-01-01
+    // DpgsqlDate (existing raw format)
+    final date = DpgsqlDate(100); // 100 days since 2000-01-01
     expect(date.days, 100);
 
-    // NpgsqlTime (existing raw format)
-    final time = NpgsqlTime(3600000000); // 1 hour in microseconds
+    // DpgsqlTime (existing raw format)
+    final time = DpgsqlTime(3600000000); // 1 hour in microseconds
     expect(time.microseconds, 3600000000);
 
-    // NpgsqlTimestamp (existing raw format)
+    // DpgsqlTimestamp (existing raw format)
     final ts =
-        NpgsqlTimestamp(1000000); // 1 second in microseconds since 2000-01-01
+        DpgsqlTimestamp(1000000); // 1 second in microseconds since 2000-01-01
     expect(ts.microseconds, 1000000);
   });
 
-  test('NpgsqlTypesConfig for enabling custom type handling', () {
+  test('DpgsqlTypesConfig for enabling custom type handling', () {
     // Config with all custom types enabled
-    final config1 = NpgsqlTypesConfig.allCustom();
+    final config1 = DpgsqlTypesConfig.allCustom();
     expect(config1.useCustomDate, true);
     expect(config1.useCustomTimestamp, true);
     expect(config1.useCustomDecimal, true);
     expect(config1.useCustomInterval, true);
 
     // Config with recommended settings (use Interval but not others)
-    final config2 = NpgsqlTypesConfig.recommended();
+    final config2 = DpgsqlTypesConfig.recommended();
     expect(config2.useCustomInterval, true);
     expect(config2.useCustomDecimal, false); // double is usually fine
     expect(config2.useCustomDate, false); // DateTime is usually fine
@@ -48,7 +48,7 @@ void main() {
 }
 
 void _pdoStyleExample() async {
-  final conn = NpgsqlConnection('Host=localhost;Database=test');
+  final conn = DpgsqlConnection('Host=localhost;Database=test');
   await conn.open();
 
   try {

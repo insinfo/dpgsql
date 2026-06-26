@@ -8,14 +8,14 @@ void main() {
 }
 
 void _batchPipelineExample() async {
-  final conn = NpgsqlConnection('Host=localhost;Database=test');
+  final conn = DpgsqlConnection('Host=localhost;Database=test');
   await conn.open();
 
   try {
-    // Method 1: Use NpgsqlBatch (automatically uses pipeline internally)
+    // Method 1: Use DpgsqlBatch (automatically uses pipeline internally)
     final batch = conn.createBatch();
     for (var i = 0; i < 100; i++) {
-      final cmd = NpgsqlBatchCommand('INSERT INTO test VALUES (\$1)');
+      final cmd = DpgsqlBatchCommand('INSERT INTO test VALUES (\$1)');
       cmd.parameters.addWithValue('val', i);
       batch.batchCommands.add(cmd);
     }

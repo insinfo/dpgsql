@@ -3,10 +3,10 @@ import 'dart:typed_data';
 
 import 'package:dpgsql/src/types/geometric_handlers.dart';
 import 'package:dpgsql/src/types/json_handler.dart';
-import 'package:dpgsql/src/types/npgsql_geometric.dart';
-import 'package:dpgsql/src/types/npgsql_range.dart';
+import 'package:dpgsql/src/types/dpgsql_geometric.dart';
+import 'package:dpgsql/src/types/dpgsql_range.dart';
 import 'package:dpgsql/src/types/range_handlers.dart';
-import 'package:dpgsql/src/types/npgsql_types.dart';
+import 'package:dpgsql/src/types/dpgsql_types.dart';
 import 'package:dpgsql/src/types/type_handler.dart';
 import 'package:test/test.dart';
 
@@ -30,10 +30,32 @@ void main() {
     });
   });
 
+  group('Bytea Types', () {
+    test('ByteaHandler parses PostgreSQL hex text format', () {
+      const handler = ByteaHandler();
+      final result = handler.read(
+        Uint8List.fromList(r'\x00ff5c'.codeUnits),
+        isText: true,
+      );
+
+      expect(result, orderedEquals(<int>[0, 255, 92]));
+    });
+
+    test('ByteaHandler parses PostgreSQL escape text format', () {
+      const handler = ByteaHandler();
+      final result = handler.read(
+        Uint8List.fromList(r'abc\\\001'.codeUnits),
+        isText: true,
+      );
+
+      expect(result, orderedEquals(<int>[97, 98, 99, 92, 1]));
+    });
+  });
+
   group('Geometric Types', () {
     test('PointHandler', () {
       const handler = PointHandler();
-      const p = NpgsqlPoint(1.5, 2.5);
+      const p = DpgsqlPoint(1.5, 2.5);
       final bytes = handler.write(p);
       expect(bytes.length, 16);
       expect(handler.read(bytes), p);
@@ -41,7 +63,7 @@ void main() {
 
     test('BoxHandler', () {
       const handler = BoxHandler();
-      const b = NpgsqlBox(NpgsqlPoint(10, 10), NpgsqlPoint(0, 0));
+      const b = DpgsqlBox(DpgsqlPoint(10, 10), DpgsqlPoint(0, 0));
       final bytes = handler.write(b);
       expect(bytes.length, 32);
       final read = handler.read(bytes);
@@ -51,7 +73,7 @@ void main() {
 
     test('PathHandler', () {
       const handler = PathHandler();
-      const p = NpgsqlPath([NpgsqlPoint(0, 0), NpgsqlPoint(1, 1)], open: true);
+      const p = DpgsqlPath([DpgsqlPoint(0, 0), DpgsqlPoint(1, 1)], open: true);
       final bytes = handler.write(p);
       // 1 (bool) + 4 (count) + 16*2 (points) = 37 bytes
       expect(bytes.length, 37);
@@ -65,7 +87,7 @@ void main() {
   group('Range Types', () {
     test('Int4RangeHandler', () {
       final handler = RangeHandler<int>(0, const IntegerHandler());
-      const r = NpgsqlRange(lowerBound: 1, upperBound: 10);
+      const r = DpgsqlRange(lowerBound: 1, upperBound: 10);
       final bytes = handler.write(r);
       // Flags(1) + Len(4)+Val(4) + Len(4)+Val(4) = 1 + 8 + 8 = 17 bytes
       expect(bytes.length, 17);
@@ -75,7 +97,7 @@ void main() {
 
     test('Int4RangeHandler Empty', () {
       final handler = RangeHandler<int>(0, const IntegerHandler());
-      const r = NpgsqlRange<int>.empty();
+      const r = DpgsqlRange<int>.empty();
       final bytes = handler.write(r);
       expect(bytes.length, 1);
       expect(bytes[0], 0x01); // Empty flag
@@ -85,7 +107,7 @@ void main() {
 
     test('Int4RangeHandler Infinite', () {
       final handler = RangeHandler<int>(0, const IntegerHandler());
-      const r = NpgsqlRange<int>(lowerBoundInfinite: true, upperBound: 5);
+      const r = DpgsqlRange<int>(lowerBoundInfinite: true, upperBound: 5);
       final bytes = handler.write(r);
       // Flags(1) + UpperBound(8) = 9 bytes?
       // Flags: LowerInfinite(0x08) | LowerInclusive(0x02 default) -> 0x0A?
@@ -147,9 +169,9 @@ void main() {
     });
   });
 
-  group('NpgsqlInterval Parsing', () {
+  group('DpgsqlInterval Parsing', () {
     test('Parse full format', () {
-      final i = NpgsqlInterval.parse('1 year 2 mons 3 days 04:05:06.5');
+      final i = DpgsqlInterval.parse('1 year 2 mons 3 days 04:05:06.5');
       // 1 year = 12 months. Total months = 14.
       expect(i.months, 14);
       expect(i.days, 3);
@@ -160,27 +182,27 @@ void main() {
     });
 
     test('Parse partial', () {
-      final i = NpgsqlInterval.parse('1 day 01:00:00');
+      final i = DpgsqlInterval.parse('1 day 01:00:00');
       expect(i.months, 0);
       expect(i.days, 1);
       expect(i.time, 3600000000);
     });
 
     test('Parse negative', () {
-      final i = NpgsqlInterval.parse('-1 days');
+      final i = DpgsqlInterval.parse('-1 days');
       expect(i.days, -1);
     });
 
     test('Parse plurals and singulars', () {
-      final i = NpgsqlInterval.parse('1 year 1 mon 1 day');
+      final i = DpgsqlInterval.parse('1 year 1 mon 1 day');
       expect(i.months, 13);
       expect(i.days, 1);
     });
   });
 
-  group('NpgsqlDecimal', () {
+  group('DpgsqlDecimal', () {
     test('toString formats base-10000 digits', () {
-      const value = NpgsqlDecimal(
+      const value = DpgsqlDecimal(
         ndigits: 2,
         weight: 0,
         sign: 0,
@@ -192,7 +214,7 @@ void main() {
     });
 
     test('toString formats negative fractional value', () {
-      const value = NpgsqlDecimal(
+      const value = DpgsqlDecimal(
         ndigits: 1,
         weight: -1,
         sign: 0x4000,
@@ -201,6 +223,32 @@ void main() {
       );
 
       expect(value.toString(), '-0.1250');
+    });
+
+    test('parse converts text numeric to base-10000 digits', () {
+      final value = DpgsqlDecimal.parse('123456.7800');
+
+      expect(value.ndigits, 3);
+      expect(value.weight, 1);
+      expect(value.sign, 0);
+      expect(value.dscale, 4);
+      expect(value.digits, orderedEquals(<int>[12, 3456, 7800]));
+      expect(value.toString(), '123456.7800');
+    });
+
+    test('parse converts negative fractional text numeric', () {
+      final value = DpgsqlDecimal.parse('-0.00123');
+
+      expect(value.weight, -1);
+      expect(value.sign, 0x4000);
+      expect(value.dscale, 5);
+      expect(value.digits, orderedEquals(<int>[12, 3000]));
+      expect(value.toString(), '-0.00123');
+    });
+
+    test('parse expands scientific notation', () {
+      expect(DpgsqlDecimal.parse('1.23e3').toString(), '1230');
+      expect(DpgsqlDecimal.parse('1.23e-3').toString(), '0.00123');
     });
   });
 }

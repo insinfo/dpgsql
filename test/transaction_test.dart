@@ -4,7 +4,7 @@ import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('NpgsqlTransaction executes commands', () async {
+  test('DpgsqlTransaction executes commands', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -43,7 +43,7 @@ void main() {
       });
     });
 
-    final conn = NpgsqlConnection('Host=localhost; Port=$port');
+    final conn = DpgsqlConnection('Host=localhost; Port=$port');
     await conn.open();
 
     final tx = await conn.beginTransaction();

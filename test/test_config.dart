@@ -17,8 +17,8 @@ String realConnectionString({String? options}) {
   return '$base$separator$options';
 }
 
-Future<NpgsqlConnection?> openRealConnectionOrSkip({String? options}) async {
-  final conn = NpgsqlConnection(realConnectionString(options: options));
+Future<DpgsqlConnection?> openRealConnectionOrSkip({String? options}) async {
+  final conn = DpgsqlConnection(realConnectionString(options: options));
   try {
     await conn.open();
     return conn;
@@ -36,7 +36,7 @@ Future<NpgsqlConnection?> openRealConnectionOrSkip({String? options}) async {
 }
 
 Future<Object?> executeScalar(
-  NpgsqlConnection conn,
+  DpgsqlConnection conn,
   String sql, [
   Map<String, Object?> parameters = const {},
 ]) async {

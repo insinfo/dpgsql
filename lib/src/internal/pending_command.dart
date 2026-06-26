@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:collection';
 
-import '../npgsql_batch_command.dart';
+import '../dpgsql_batch_command.dart';
 import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
 
@@ -21,7 +21,7 @@ enum CommandState {
 }
 
 /// Represents a command that has been sent to the server and is awaiting response(s).
-/// Porting concepts from Npgsql's pipeline management.
+/// Porting concepts from Dpgsql's pipeline management.
 class PendingCommand {
   PendingCommand({
     required this.sql,
@@ -77,8 +77,8 @@ class PendingCommand {
   /// Stack trace of the error.
   StackTrace? stackTrace;
 
-  /// Batch command associado (quando executado via NpgsqlBatch).
-  NpgsqlBatchCommand? batchCommand;
+  /// Batch command associado (quando executado via DpgsqlBatch).
+  DpgsqlBatchCommand? batchCommand;
 
   /// Command tag informado pelo servidor (e.g. "UPDATE 3").
   String? commandTag;

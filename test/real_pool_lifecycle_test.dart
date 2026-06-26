@@ -10,7 +10,7 @@ void main() {
     if (probe == null) return;
     await probe.close();
 
-    final dataSource = NpgsqlDataSource(realConnectionString(
+    final dataSource = DpgsqlDataSource(realConnectionString(
       options:
           'Maximum Pool Size=1;Max Auto Prepare=2;Auto Prepare Min Usages=1',
     ));

@@ -154,8 +154,7 @@ void main() {
         ..._cstring('falhou'),
         0x00,
       ];
-      final bytes =
-          _frame(BackendMessageCode.errorResponse.typeCode, payload);
+      final bytes = _frame(BackendMessageCode.errorResponse.typeCode, payload);
 
       final msg = await BackendMessageReader(
               PostgresMessageReader(MemoryBinaryInput(bytes)))

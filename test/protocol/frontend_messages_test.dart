@@ -33,7 +33,7 @@ void main() {
       await frontend.writeStartupMessage(
         user: 'alice',
         database: 'testdb',
-        parameters: {'application_name': 'npgsql_dart'},
+        parameters: {'application_name': 'dpgsql_dart'},
       );
 
       final bytes = out.toUint8List();

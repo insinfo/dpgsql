@@ -24,7 +24,7 @@ void main() {
     });
 
     final conn =
-        NpgsqlConnection('Host=localhost; Port=$port; SSL Mode=Require');
+        DpgsqlConnection('Host=localhost; Port=$port; SSL Mode=Require');
 
     try {
       await conn.open();
@@ -73,7 +73,7 @@ void main() {
     });
 
     final conn =
-        NpgsqlConnection('Host=localhost; Port=$port; SSL Mode=Prefer');
+        DpgsqlConnection('Host=localhost; Port=$port; SSL Mode=Prefer');
 
     await conn.open();
     expect(conn.state, ConnectionState.open);

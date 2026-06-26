@@ -143,7 +143,7 @@ void main() {
       });
     });
 
-    final conn = NpgsqlConnection(
+    final conn = DpgsqlConnection(
         'Host=localhost; Port=$port; Username=postgres; Password=$password');
 
     await conn.open();

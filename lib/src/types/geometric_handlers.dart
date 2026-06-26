@@ -3,29 +3,29 @@ import 'dart:convert';
 
 import 'oid.dart';
 import 'type_handler.dart';
-import 'npgsql_geometric.dart';
+import 'dpgsql_geometric.dart';
 
-class PointHandler extends TypeHandler<NpgsqlPoint> {
+class PointHandler extends TypeHandler<DpgsqlPoint> {
   const PointHandler();
 
   @override
   int get oid => Oid.point;
 
   @override
-  NpgsqlPoint read(Uint8List buffer,
+  DpgsqlPoint read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // (x,y)
       final str = encoding.decode(buffer);
       final parts = str.substring(1, str.length - 1).split(',');
-      return NpgsqlPoint(double.parse(parts[0]), double.parse(parts[1]));
+      return DpgsqlPoint(double.parse(parts[0]), double.parse(parts[1]));
     }
     final bd = ByteData.sublistView(buffer);
-    return NpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
+    return DpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
   }
 
   @override
-  Uint8List write(NpgsqlPoint value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlPoint value, {Encoding encoding = utf8}) {
     final bd = ByteData(16);
     bd.setFloat64(0, value.x);
     bd.setFloat64(8, value.y);
@@ -33,14 +33,14 @@ class PointHandler extends TypeHandler<NpgsqlPoint> {
   }
 }
 
-class BoxHandler extends TypeHandler<NpgsqlBox> {
+class BoxHandler extends TypeHandler<DpgsqlBox> {
   const BoxHandler();
 
   @override
   int get oid => Oid.box;
 
   @override
-  NpgsqlBox read(Uint8List buffer,
+  DpgsqlBox read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // (x1,y1),(x2,y2)
@@ -58,19 +58,19 @@ class BoxHandler extends TypeHandler<NpgsqlBox> {
       final p2Parts = p2Str.split(',');
 
       final p1 =
-          NpgsqlPoint(double.parse(p1Parts[0]), double.parse(p1Parts[1]));
+          DpgsqlPoint(double.parse(p1Parts[0]), double.parse(p1Parts[1]));
       final p2 =
-          NpgsqlPoint(double.parse(p2Parts[0]), double.parse(p2Parts[1]));
-      return NpgsqlBox(p1, p2);
+          DpgsqlPoint(double.parse(p2Parts[0]), double.parse(p2Parts[1]));
+      return DpgsqlBox(p1, p2);
     }
     final bd = ByteData.sublistView(buffer);
-    final high = NpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
-    final low = NpgsqlPoint(bd.getFloat64(16), bd.getFloat64(24));
-    return NpgsqlBox(high, low);
+    final high = DpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
+    final low = DpgsqlPoint(bd.getFloat64(16), bd.getFloat64(24));
+    return DpgsqlBox(high, low);
   }
 
   @override
-  Uint8List write(NpgsqlBox value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlBox value, {Encoding encoding = utf8}) {
     final bd = ByteData(32);
     bd.setFloat64(0, value.upperRight.x);
     bd.setFloat64(8, value.upperRight.y);
@@ -80,14 +80,14 @@ class BoxHandler extends TypeHandler<NpgsqlBox> {
   }
 }
 
-class LSegHandler extends TypeHandler<NpgsqlLSeg> {
+class LSegHandler extends TypeHandler<DpgsqlLSeg> {
   const LSegHandler();
 
   @override
   int get oid => Oid.lseg;
 
   @override
-  NpgsqlLSeg read(Uint8List buffer,
+  DpgsqlLSeg read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // [(x1,y1),(x2,y2)]
@@ -103,19 +103,19 @@ class LSegHandler extends TypeHandler<NpgsqlLSeg> {
       final p2Parts = p2Str.split(',');
 
       final p1 =
-          NpgsqlPoint(double.parse(p1Parts[0]), double.parse(p1Parts[1]));
+          DpgsqlPoint(double.parse(p1Parts[0]), double.parse(p1Parts[1]));
       final p2 =
-          NpgsqlPoint(double.parse(p2Parts[0]), double.parse(p2Parts[1]));
-      return NpgsqlLSeg(p1, p2);
+          DpgsqlPoint(double.parse(p2Parts[0]), double.parse(p2Parts[1]));
+      return DpgsqlLSeg(p1, p2);
     }
     final bd = ByteData.sublistView(buffer);
-    final start = NpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
-    final end = NpgsqlPoint(bd.getFloat64(16), bd.getFloat64(24));
-    return NpgsqlLSeg(start, end);
+    final start = DpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
+    final end = DpgsqlPoint(bd.getFloat64(16), bd.getFloat64(24));
+    return DpgsqlLSeg(start, end);
   }
 
   @override
-  Uint8List write(NpgsqlLSeg value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlLSeg value, {Encoding encoding = utf8}) {
     final bd = ByteData(32);
     bd.setFloat64(0, value.start.x);
     bd.setFloat64(8, value.start.y);
@@ -125,29 +125,29 @@ class LSegHandler extends TypeHandler<NpgsqlLSeg> {
   }
 }
 
-class LineHandler extends TypeHandler<NpgsqlLine> {
+class LineHandler extends TypeHandler<DpgsqlLine> {
   const LineHandler();
 
   @override
   int get oid => Oid.line;
 
   @override
-  NpgsqlLine read(Uint8List buffer,
+  DpgsqlLine read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // {a,b,c}
       final str = encoding.decode(buffer);
       final clean = str.substring(1, str.length - 1);
       final parts = clean.split(',');
-      return NpgsqlLine(double.parse(parts[0]), double.parse(parts[1]),
+      return DpgsqlLine(double.parse(parts[0]), double.parse(parts[1]),
           double.parse(parts[2]));
     }
     final bd = ByteData.sublistView(buffer);
-    return NpgsqlLine(bd.getFloat64(0), bd.getFloat64(8), bd.getFloat64(16));
+    return DpgsqlLine(bd.getFloat64(0), bd.getFloat64(8), bd.getFloat64(16));
   }
 
   @override
-  Uint8List write(NpgsqlLine value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlLine value, {Encoding encoding = utf8}) {
     final bd = ByteData(24);
     bd.setFloat64(0, value.a);
     bd.setFloat64(8, value.b);
@@ -156,14 +156,14 @@ class LineHandler extends TypeHandler<NpgsqlLine> {
   }
 }
 
-class PathHandler extends TypeHandler<NpgsqlPath> {
+class PathHandler extends TypeHandler<DpgsqlPath> {
   const PathHandler();
 
   @override
   int get oid => Oid.path;
 
   @override
-  NpgsqlPath read(Uint8List buffer,
+  DpgsqlPath read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // [(x,y),...] or ((x,y),...)
@@ -171,30 +171,30 @@ class PathHandler extends TypeHandler<NpgsqlPath> {
       final open = str.startsWith('[');
       final clean = str.substring(1, str.length - 1);
       final pointStrs = clean.split('),(');
-      final points = <NpgsqlPoint>[];
+      final points = <DpgsqlPoint>[];
       for (var s in pointStrs) {
         s = s.replaceAll('(', '').replaceAll(')', '');
         final parts = s.split(',');
-        points.add(NpgsqlPoint(double.parse(parts[0]), double.parse(parts[1])));
+        points.add(DpgsqlPoint(double.parse(parts[0]), double.parse(parts[1])));
       }
-      return NpgsqlPath(points, open: open);
+      return DpgsqlPath(points, open: open);
     }
     final bd = ByteData.sublistView(buffer);
     // Postgres docs: "1 byte for boolean (0=closed, 1=open)"
     final open = buffer[0] == 1;
 
     final npts = bd.getInt32(1);
-    final points = <NpgsqlPoint>[];
+    final points = <DpgsqlPoint>[];
     int offset = 5;
     for (var i = 0; i < npts; i++) {
-      points.add(NpgsqlPoint(bd.getFloat64(offset), bd.getFloat64(offset + 8)));
+      points.add(DpgsqlPoint(bd.getFloat64(offset), bd.getFloat64(offset + 8)));
       offset += 16;
     }
-    return NpgsqlPath(points, open: open);
+    return DpgsqlPath(points, open: open);
   }
 
   @override
-  Uint8List write(NpgsqlPath value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlPath value, {Encoding encoding = utf8}) {
     final bd = ByteData(5 + value.points.length * 16);
     bd.setUint8(0, value.open ? 1 : 0);
     bd.setInt32(1, value.points.length);
@@ -208,14 +208,14 @@ class PathHandler extends TypeHandler<NpgsqlPath> {
   }
 }
 
-class PolygonHandler extends TypeHandler<NpgsqlPolygon> {
+class PolygonHandler extends TypeHandler<DpgsqlPolygon> {
   const PolygonHandler();
 
   @override
   int get oid => Oid.polygon;
 
   @override
-  NpgsqlPolygon read(Uint8List buffer,
+  DpgsqlPolygon read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // ((x,y),...)
@@ -225,27 +225,27 @@ class PolygonHandler extends TypeHandler<NpgsqlPolygon> {
       final inner =
           clean.startsWith('(') ? clean.substring(1, clean.length - 1) : clean;
       final pointStrs = inner.split('),(');
-      final points = <NpgsqlPoint>[];
+      final points = <DpgsqlPoint>[];
       for (var s in pointStrs) {
         s = s.replaceAll('(', '').replaceAll(')', '');
         final parts = s.split(',');
-        points.add(NpgsqlPoint(double.parse(parts[0]), double.parse(parts[1])));
+        points.add(DpgsqlPoint(double.parse(parts[0]), double.parse(parts[1])));
       }
-      return NpgsqlPolygon(points);
+      return DpgsqlPolygon(points);
     }
     final bd = ByteData.sublistView(buffer);
     final npts = bd.getInt32(0);
-    final points = <NpgsqlPoint>[];
+    final points = <DpgsqlPoint>[];
     int offset = 4;
     for (var i = 0; i < npts; i++) {
-      points.add(NpgsqlPoint(bd.getFloat64(offset), bd.getFloat64(offset + 8)));
+      points.add(DpgsqlPoint(bd.getFloat64(offset), bd.getFloat64(offset + 8)));
       offset += 16;
     }
-    return NpgsqlPolygon(points);
+    return DpgsqlPolygon(points);
   }
 
   @override
-  Uint8List write(NpgsqlPolygon value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlPolygon value, {Encoding encoding = utf8}) {
     final bd = ByteData(4 + value.points.length * 16);
     bd.setInt32(0, value.points.length);
     int offset = 4;
@@ -258,14 +258,14 @@ class PolygonHandler extends TypeHandler<NpgsqlPolygon> {
   }
 }
 
-class CircleHandler extends TypeHandler<NpgsqlCircle> {
+class CircleHandler extends TypeHandler<DpgsqlCircle> {
   const CircleHandler();
 
   @override
   int get oid => Oid.circle;
 
   @override
-  NpgsqlCircle read(Uint8List buffer,
+  DpgsqlCircle read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // <(x,y),r>
@@ -280,18 +280,18 @@ class CircleHandler extends TypeHandler<NpgsqlCircle> {
       final pParts = pStrClean.split(',');
 
       final center =
-          NpgsqlPoint(double.parse(pParts[0]), double.parse(pParts[1]));
+          DpgsqlPoint(double.parse(pParts[0]), double.parse(pParts[1]));
       final radius = double.parse(rStr);
-      return NpgsqlCircle(center, radius);
+      return DpgsqlCircle(center, radius);
     }
     final bd = ByteData.sublistView(buffer);
-    final center = NpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
+    final center = DpgsqlPoint(bd.getFloat64(0), bd.getFloat64(8));
     final radius = bd.getFloat64(16);
-    return NpgsqlCircle(center, radius);
+    return DpgsqlCircle(center, radius);
   }
 
   @override
-  Uint8List write(NpgsqlCircle value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlCircle value, {Encoding encoding = utf8}) {
     final bd = ByteData(24);
     bd.setFloat64(0, value.center.x);
     bd.setFloat64(8, value.center.y);

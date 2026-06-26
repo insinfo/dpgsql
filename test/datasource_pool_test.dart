@@ -5,8 +5,8 @@ import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('NpgsqlConnectionStringBuilder parses pool options', () {
-    final builder = NpgsqlConnectionStringBuilder(
+  test('DpgsqlConnectionStringBuilder parses pool options', () {
+    final builder = DpgsqlConnectionStringBuilder(
       'Host=localhost;Minimum Pool Size=2;Maximum Pool Size=8;'
       'Timeout=3;Connection Idle Lifetime=7;Connection Lifetime=11;'
       'Connection Pruning Interval=13',
@@ -20,7 +20,7 @@ void main() {
     expect(builder.connectionPruningInterval, const Duration(seconds: 13));
   });
 
-  test('NpgsqlDataSource pools connections', () async {
+  test('DpgsqlDataSource pools connections', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -42,7 +42,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource('Host=localhost; Port=$port');
+    final dataSource = DpgsqlDataSource('Host=localhost; Port=$port');
 
     // 1. Open first connection
     final conn1 = await dataSource.openConnection();
@@ -70,7 +70,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlDataSource waits when maximum pool size is reached', () async {
+  test('DpgsqlDataSource waits when maximum pool size is reached', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -86,7 +86,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource(
+    final dataSource = DpgsqlDataSource(
       'Host=localhost; Port=$port; Maximum Pool Size=1; Timeout=5',
     );
 
@@ -112,7 +112,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlDataSource times out when pool wait exceeds Timeout', () async {
+  test('DpgsqlDataSource times out when pool wait exceeds Timeout', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -126,7 +126,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource(
+    final dataSource = DpgsqlDataSource(
       'Host=localhost; Port=$port; Maximum Pool Size=1; Timeout=0',
     );
 
@@ -143,7 +143,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlDataSource warmup pre-creates minimum pool size', () async {
+  test('DpgsqlDataSource warmup pre-creates minimum pool size', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -159,7 +159,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource(
+    final dataSource = DpgsqlDataSource(
       'Host=localhost; Port=$port; Minimum Pool Size=2; Maximum Pool Size=4',
     );
 
@@ -171,7 +171,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlDataSource discards connector returned with active reader',
+  test('DpgsqlDataSource discards connector returned with active reader',
       () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
@@ -192,7 +192,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource(
+    final dataSource = DpgsqlDataSource(
       'Host=localhost; Port=$port; Maximum Pool Size=1',
     );
 
@@ -211,7 +211,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlDataSource discards connector returned with active transaction',
+  test('DpgsqlDataSource discards connector returned with active transaction',
       () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
@@ -232,7 +232,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource(
+    final dataSource = DpgsqlDataSource(
       'Host=localhost; Port=$port; Maximum Pool Size=1',
     );
 
@@ -249,7 +249,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlDataSource discards connector returned with active COPY',
+  test('DpgsqlDataSource discards connector returned with active COPY',
       () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
@@ -270,7 +270,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource(
+    final dataSource = DpgsqlDataSource(
       'Host=localhost; Port=$port; Maximum Pool Size=1',
     );
 
@@ -290,7 +290,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlDataSource discards connector after cancelled COPY', () async {
+  test('DpgsqlDataSource discards connector after cancelled COPY', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -310,7 +310,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource(
+    final dataSource = DpgsqlDataSource(
       'Host=localhost; Port=$port; Maximum Pool Size=1',
     );
 

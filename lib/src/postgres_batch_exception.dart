@@ -1,16 +1,16 @@
-import 'npgsql_batch_command.dart';
+import 'dpgsql_batch_command.dart';
 import 'postgres_exception.dart';
 
-/// Exceção lançada quando uma execução de [NpgsqlBatch] falha parcialmente.
+/// Exceção lançada quando uma execução de [DpgsqlBatch] falha parcialmente.
 ///
-/// Espelha o comportamento do `PostgresBatchException` do Npgsql original,
+/// Espelha o comportamento do `PostgresBatchException` do Dpgsql original,
 /// carregando a exceção raiz e o estado final de cada comando do batch.
 class PostgresBatchException extends PostgresException {
   PostgresBatchException({
     required PostgresException inner,
-    required List<NpgsqlBatchCommand> commands,
+    required List<DpgsqlBatchCommand> commands,
     required this.errorCommandIndex,
-  })  : batchCommands = List<NpgsqlBatchCommand>.unmodifiable(commands),
+  })  : batchCommands = List<DpgsqlBatchCommand>.unmodifiable(commands),
         rootException = inner,
         super(
           severity: inner.severity,
@@ -37,13 +37,13 @@ class PostgresBatchException extends PostgresException {
   final PostgresException rootException;
 
   /// Snapshot imutável dos comandos do batch no momento da falha.
-  final List<NpgsqlBatchCommand> batchCommands;
+  final List<DpgsqlBatchCommand> batchCommands;
 
   /// Índice do comando que originou o erro, ou -1 quando indeterminado.
   final int errorCommandIndex;
 
   /// Referência direta ao comando problemático, quando disponível.
-  NpgsqlBatchCommand? get failedCommand {
+  DpgsqlBatchCommand? get failedCommand {
     if (errorCommandIndex < 0 || errorCommandIndex >= batchCommands.length) {
       return null;
     }

@@ -2,135 +2,135 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'type_handler.dart';
 import 'oid.dart';
-import 'npgsql_types.dart';
+import 'dpgsql_types.dart';
 
-class NpgsqlDateHandler extends TypeHandler<NpgsqlDate> {
-  const NpgsqlDateHandler();
+class DpgsqlDateHandler extends TypeHandler<DpgsqlDate> {
+  const DpgsqlDateHandler();
 
   @override
   int get oid => Oid.date;
 
   @override
-  NpgsqlDate read(Uint8List buffer,
+  DpgsqlDate read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       final str = encoding.decode(buffer);
-      return NpgsqlDate.parse(str);
+      return DpgsqlDate.parse(str);
     }
     final bd = ByteData.sublistView(buffer);
     final days = bd.getInt32(0);
-    return NpgsqlDate(days);
+    return DpgsqlDate(days);
   }
 
   @override
-  Uint8List write(NpgsqlDate value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlDate value, {Encoding encoding = utf8}) {
     final bd = ByteData(4);
     bd.setInt32(0, value.days);
     return bd.buffer.asUint8List();
   }
 }
 
-class NpgsqlTimeHandler extends TypeHandler<NpgsqlTime> {
-  const NpgsqlTimeHandler();
+class DpgsqlTimeHandler extends TypeHandler<DpgsqlTime> {
+  const DpgsqlTimeHandler();
 
   @override
   int get oid => Oid.time;
 
   @override
-  NpgsqlTime read(Uint8List buffer,
+  DpgsqlTime read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       final str = encoding.decode(buffer);
-      return NpgsqlTime.parse(str);
+      return DpgsqlTime.parse(str);
     }
     final bd = ByteData.sublistView(buffer);
     final micros = bd.getInt64(0);
-    return NpgsqlTime(micros);
+    return DpgsqlTime(micros);
   }
 
   @override
-  Uint8List write(NpgsqlTime value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlTime value, {Encoding encoding = utf8}) {
     final bd = ByteData(8);
     bd.setInt64(0, value.microseconds);
     return bd.buffer.asUint8List();
   }
 }
 
-class NpgsqlTimestampHandler extends TypeHandler<NpgsqlTimestamp> {
-  const NpgsqlTimestampHandler();
+class DpgsqlTimestampHandler extends TypeHandler<DpgsqlTimestamp> {
+  const DpgsqlTimestampHandler();
 
   @override
   int get oid => Oid.timestamp;
 
   @override
-  NpgsqlTimestamp read(Uint8List buffer,
+  DpgsqlTimestamp read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       final str = encoding.decode(buffer);
-      return NpgsqlTimestamp.parse(str);
+      return DpgsqlTimestamp.parse(str);
     }
     final bd = ByteData.sublistView(buffer);
     final micros = bd.getInt64(0);
-    return NpgsqlTimestamp(micros);
+    return DpgsqlTimestamp(micros);
   }
 
   @override
-  Uint8List write(NpgsqlTimestamp value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlTimestamp value, {Encoding encoding = utf8}) {
     final bd = ByteData(8);
     bd.setInt64(0, value.microseconds);
     return bd.buffer.asUint8List();
   }
 }
 
-class NpgsqlMoneyHandler extends TypeHandler<NpgsqlMoney> {
-  const NpgsqlMoneyHandler();
+class DpgsqlMoneyHandler extends TypeHandler<DpgsqlMoney> {
+  const DpgsqlMoneyHandler();
 
   @override
   int get oid => Oid.money;
 
   @override
-  NpgsqlMoney read(Uint8List buffer,
+  DpgsqlMoney read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       final str = encoding.decode(buffer);
-      return NpgsqlMoney.parse(str);
+      return DpgsqlMoney.parse(str);
     }
     final bd = ByteData.sublistView(buffer);
     final val = bd.getInt64(0);
-    return NpgsqlMoney(val);
+    return DpgsqlMoney(val);
   }
 
   @override
-  Uint8List write(NpgsqlMoney value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlMoney value, {Encoding encoding = utf8}) {
     final bd = ByteData(8);
     bd.setInt64(0, value.value);
     return bd.buffer.asUint8List();
   }
 }
 
-class NpgsqlIntervalHandler extends TypeHandler<NpgsqlInterval> {
-  const NpgsqlIntervalHandler();
+class DpgsqlIntervalHandler extends TypeHandler<DpgsqlInterval> {
+  const DpgsqlIntervalHandler();
 
   @override
   int get oid => Oid.interval;
 
   @override
-  NpgsqlInterval read(Uint8List buffer,
+  DpgsqlInterval read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       final str = encoding.decode(buffer);
-      return NpgsqlInterval.parse(str);
+      return DpgsqlInterval.parse(str);
     }
     final bd = ByteData.sublistView(buffer);
     // 16 bytes: time(8), days(4), months(4)
     final time = bd.getInt64(0);
     final days = bd.getInt32(8);
     final months = bd.getInt32(12);
-    return NpgsqlInterval(months: months, days: days, time: time);
+    return DpgsqlInterval(months: months, days: days, time: time);
   }
 
   @override
-  Uint8List write(NpgsqlInterval value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlInterval value, {Encoding encoding = utf8}) {
     final bd = ByteData(16);
     bd.setInt64(0, value.time);
     bd.setInt32(8, value.days);
@@ -139,18 +139,18 @@ class NpgsqlIntervalHandler extends TypeHandler<NpgsqlInterval> {
   }
 }
 
-class NpgsqlDecimalHandler extends TypeHandler<NpgsqlDecimal> {
-  const NpgsqlDecimalHandler();
+class DpgsqlDecimalHandler extends TypeHandler<DpgsqlDecimal> {
+  const DpgsqlDecimalHandler();
 
   @override
   int get oid => Oid.numeric;
 
   @override
-  NpgsqlDecimal read(Uint8List buffer,
+  DpgsqlDecimal read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       final str = encoding.decode(buffer);
-      return NpgsqlDecimal.parse(str);
+      return DpgsqlDecimal.parse(str);
     }
     final bd = ByteData.sublistView(buffer);
     int offset = 0;
@@ -169,7 +169,7 @@ class NpgsqlDecimalHandler extends TypeHandler<NpgsqlDecimal> {
       offset += 2;
     }
 
-    return NpgsqlDecimal(
+    return DpgsqlDecimal(
         ndigits: ndigits,
         weight: weight,
         sign: sign,
@@ -178,7 +178,7 @@ class NpgsqlDecimalHandler extends TypeHandler<NpgsqlDecimal> {
   }
 
   @override
-  Uint8List write(NpgsqlDecimal value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlDecimal value, {Encoding encoding = utf8}) {
     final len = 8 + (value.digits.length * 2);
     final bd = ByteData(len);
     int offset = 0;

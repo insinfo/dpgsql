@@ -1,5 +1,3 @@
-
-
 import 'package:dpgsql/src/io/binary_input.dart';
 import 'package:dpgsql/src/io/binary_output.dart';
 import 'package:dpgsql/src/protocol/postgres_message.dart';

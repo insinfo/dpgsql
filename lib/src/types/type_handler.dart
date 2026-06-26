@@ -1,13 +1,13 @@
 import 'dart:typed_data';
 import 'dart:convert';
-import '../npgsql_db_type.dart';
+import '../dpgsql_db_type.dart';
 import '../internal/timezone_helper.dart';
 import 'oid.dart';
 import 'json_handler.dart';
 import 'geometric_handlers.dart';
 import 'range_handlers.dart';
-import 'npgsql_types.dart';
-import 'npgsql_geometric.dart';
+import 'dpgsql_types.dart';
+import 'dpgsql_geometric.dart';
 import 'custom_type_handlers.dart';
 
 /// Base class for handling PostgreSQL types.
@@ -205,8 +205,22 @@ class ByteaHandler extends TypeHandler<Uint8List> {
   Uint8List read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      // TODO: Parse hex format \x...
-      return buffer;
+      if (buffer.length >= 2 && buffer[0] == 0x5C && buffer[1] == 0x78) {
+        final hexLength = buffer.length - 2;
+        if (hexLength.isOdd) {
+          throw FormatException('Invalid bytea hex length: $hexLength');
+        }
+
+        final output = Uint8List(hexLength ~/ 2);
+        var writeIndex = 0;
+        for (var i = 2; i < buffer.length; i += 2) {
+          output[writeIndex++] =
+              (_hexValue(buffer[i]) << 4) | _hexValue(buffer[i + 1]);
+        }
+        return output;
+      }
+
+      return _readEscapeBytea(buffer);
     }
     return buffer;
   }
@@ -215,6 +229,59 @@ class ByteaHandler extends TypeHandler<Uint8List> {
   Uint8List write(Uint8List value, {Encoding encoding = utf8}) {
     return value;
   }
+
+  static int _hexValue(int codeUnit) {
+    if (codeUnit >= 0x30 && codeUnit <= 0x39) {
+      return codeUnit - 0x30;
+    }
+    if (codeUnit >= 0x41 && codeUnit <= 0x46) {
+      return codeUnit - 0x41 + 10;
+    }
+    if (codeUnit >= 0x61 && codeUnit <= 0x66) {
+      return codeUnit - 0x61 + 10;
+    }
+    throw FormatException(
+        'Invalid bytea hex digit: ${String.fromCharCode(codeUnit)}');
+  }
+
+  static Uint8List _readEscapeBytea(Uint8List buffer) {
+    final output = BytesBuilder(copy: false);
+    for (var i = 0; i < buffer.length; i++) {
+      final value = buffer[i];
+      if (value != 0x5C) {
+        output.addByte(value);
+        continue;
+      }
+
+      if (i + 1 >= buffer.length) {
+        output.addByte(value);
+        continue;
+      }
+
+      final next = buffer[i + 1];
+      if (next == 0x5C) {
+        output.addByte(0x5C);
+        i++;
+        continue;
+      }
+
+      if (i + 3 < buffer.length &&
+          _isOctal(buffer[i + 1]) &&
+          _isOctal(buffer[i + 2]) &&
+          _isOctal(buffer[i + 3])) {
+        output.addByte(((buffer[i + 1] - 0x30) << 6) |
+            ((buffer[i + 2] - 0x30) << 3) |
+            (buffer[i + 3] - 0x30));
+        i += 3;
+        continue;
+      }
+
+      output.addByte(value);
+    }
+    return output.takeBytes();
+  }
+
+  static bool _isOctal(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x37;
 }
 
 class ArrayHandler<E> extends TypeHandler<List<E>> {
@@ -437,7 +504,7 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
 class TypeHandlerRegistry {
   final Map<int, TypeHandler> _oidHandlers = {};
 
-  TypeHandlerRegistry({bool useNpgsqlTypes = false}) {
+  TypeHandlerRegistry({bool useDpgsqlTypes = false}) {
     register(const TextHandler());
     register(const IntegerHandler());
     register(const BooleanHandler());
@@ -445,18 +512,18 @@ class TypeHandlerRegistry {
     register(const DoubleHandler());
     register(const ByteaHandler());
 
-    if (useNpgsqlTypes) {
-      register(const NpgsqlDateHandler());
-      register(const NpgsqlTimeHandler());
-      register(const NpgsqlTimestampHandler());
+    if (useDpgsqlTypes) {
+      register(const DpgsqlDateHandler());
+      register(const DpgsqlTimeHandler());
+      register(const DpgsqlTimestampHandler());
     } else {
       register(const DateHandler());
       register(const TimestampHandler());
     }
 
-    register(const NpgsqlIntervalHandler());
-    register(const NpgsqlMoneyHandler());
-    register(const NpgsqlDecimalHandler());
+    register(const DpgsqlIntervalHandler());
+    register(const DpgsqlMoneyHandler());
+    register(const DpgsqlDecimalHandler());
 
     register(const JsonHandler());
     register(const JsonbHandler());
@@ -508,22 +575,22 @@ class TypeHandlerRegistry {
     if (value is DateTime) return _oidHandlers[Oid.timestamp];
     if (value is Uint8List) return _oidHandlers[Oid.bytea];
 
-    // Npgsql Types
-    if (value is NpgsqlDate) return _oidHandlers[Oid.date];
-    if (value is NpgsqlTime) return _oidHandlers[Oid.time];
-    if (value is NpgsqlTimestamp) return _oidHandlers[Oid.timestamp];
-    if (value is NpgsqlInterval) return _oidHandlers[Oid.interval];
-    if (value is NpgsqlMoney) return _oidHandlers[Oid.money];
-    if (value is NpgsqlDecimal) return _oidHandlers[Oid.numeric];
+    // Dpgsql Types
+    if (value is DpgsqlDate) return _oidHandlers[Oid.date];
+    if (value is DpgsqlTime) return _oidHandlers[Oid.time];
+    if (value is DpgsqlTimestamp) return _oidHandlers[Oid.timestamp];
+    if (value is DpgsqlInterval) return _oidHandlers[Oid.interval];
+    if (value is DpgsqlMoney) return _oidHandlers[Oid.money];
+    if (value is DpgsqlDecimal) return _oidHandlers[Oid.numeric];
 
     // Geometric Types
-    if (value is NpgsqlPoint) return _oidHandlers[Oid.point];
-    if (value is NpgsqlBox) return _oidHandlers[Oid.box];
-    if (value is NpgsqlLSeg) return _oidHandlers[Oid.lseg];
-    if (value is NpgsqlLine) return _oidHandlers[Oid.line];
-    if (value is NpgsqlPath) return _oidHandlers[Oid.path];
-    if (value is NpgsqlPolygon) return _oidHandlers[Oid.polygon];
-    if (value is NpgsqlCircle) return _oidHandlers[Oid.circle];
+    if (value is DpgsqlPoint) return _oidHandlers[Oid.point];
+    if (value is DpgsqlBox) return _oidHandlers[Oid.box];
+    if (value is DpgsqlLSeg) return _oidHandlers[Oid.lseg];
+    if (value is DpgsqlLine) return _oidHandlers[Oid.line];
+    if (value is DpgsqlPath) return _oidHandlers[Oid.path];
+    if (value is DpgsqlPolygon) return _oidHandlers[Oid.polygon];
+    if (value is DpgsqlCircle) return _oidHandlers[Oid.circle];
 
     // Arrays
     if (value is List) {
@@ -552,22 +619,22 @@ class TypeHandlerRegistry {
     if (T == DateTime) return _oidHandlers[Oid.timestamp] as TypeHandler<T>?;
     if (T == Uint8List) return _oidHandlers[Oid.bytea] as TypeHandler<T>?;
 
-    if (T == NpgsqlDate) return _oidHandlers[Oid.date] as TypeHandler<T>?;
-    if (T == NpgsqlTime) return _oidHandlers[Oid.time] as TypeHandler<T>?;
-    if (T == NpgsqlTimestamp)
+    if (T == DpgsqlDate) return _oidHandlers[Oid.date] as TypeHandler<T>?;
+    if (T == DpgsqlTime) return _oidHandlers[Oid.time] as TypeHandler<T>?;
+    if (T == DpgsqlTimestamp)
       return _oidHandlers[Oid.timestamp] as TypeHandler<T>?;
-    if (T == NpgsqlInterval)
+    if (T == DpgsqlInterval)
       return _oidHandlers[Oid.interval] as TypeHandler<T>?;
-    if (T == NpgsqlMoney) return _oidHandlers[Oid.money] as TypeHandler<T>?;
-    if (T == NpgsqlDecimal) return _oidHandlers[Oid.numeric] as TypeHandler<T>?;
+    if (T == DpgsqlMoney) return _oidHandlers[Oid.money] as TypeHandler<T>?;
+    if (T == DpgsqlDecimal) return _oidHandlers[Oid.numeric] as TypeHandler<T>?;
 
-    if (T == NpgsqlPoint) return _oidHandlers[Oid.point] as TypeHandler<T>?;
-    if (T == NpgsqlBox) return _oidHandlers[Oid.box] as TypeHandler<T>?;
-    if (T == NpgsqlLSeg) return _oidHandlers[Oid.lseg] as TypeHandler<T>?;
-    if (T == NpgsqlLine) return _oidHandlers[Oid.line] as TypeHandler<T>?;
-    if (T == NpgsqlPath) return _oidHandlers[Oid.path] as TypeHandler<T>?;
-    if (T == NpgsqlPolygon) return _oidHandlers[Oid.polygon] as TypeHandler<T>?;
-    if (T == NpgsqlCircle) return _oidHandlers[Oid.circle] as TypeHandler<T>?;
+    if (T == DpgsqlPoint) return _oidHandlers[Oid.point] as TypeHandler<T>?;
+    if (T == DpgsqlBox) return _oidHandlers[Oid.box] as TypeHandler<T>?;
+    if (T == DpgsqlLSeg) return _oidHandlers[Oid.lseg] as TypeHandler<T>?;
+    if (T == DpgsqlLine) return _oidHandlers[Oid.line] as TypeHandler<T>?;
+    if (T == DpgsqlPath) return _oidHandlers[Oid.path] as TypeHandler<T>?;
+    if (T == DpgsqlPolygon) return _oidHandlers[Oid.polygon] as TypeHandler<T>?;
+    if (T == DpgsqlCircle) return _oidHandlers[Oid.circle] as TypeHandler<T>?;
 
     if (T == List<int>)
       return ArrayHandler<int>(Oid.int4Array, const IntegerHandler())
@@ -598,77 +665,77 @@ class TypeHandlerRegistry {
     return null;
   }
 
-  TypeHandler? resolveByNpgsqlDbType(NpgsqlDbType dbType) {
+  TypeHandler? resolveByDpgsqlDbType(DpgsqlDbType dbType) {
     switch (dbType) {
-      case NpgsqlDbType.bigint:
+      case DpgsqlDbType.bigint:
         return _oidHandlers[Oid.int8];
-      case NpgsqlDbType.boolean:
+      case DpgsqlDbType.boolean:
         return _oidHandlers[Oid.bool];
-      case NpgsqlDbType.box:
+      case DpgsqlDbType.box:
         return _oidHandlers[Oid.box];
-      case NpgsqlDbType.bytea:
+      case DpgsqlDbType.bytea:
         return _oidHandlers[Oid.bytea];
-      case NpgsqlDbType.circle:
+      case DpgsqlDbType.circle:
         return _oidHandlers[Oid.circle];
-      case NpgsqlDbType.char:
+      case DpgsqlDbType.char:
         return _oidHandlers[Oid.bpchar];
-      case NpgsqlDbType.date:
+      case DpgsqlDbType.date:
         return _oidHandlers[Oid.date];
-      case NpgsqlDbType.double:
+      case DpgsqlDbType.double:
         return _oidHandlers[Oid.float8];
-      case NpgsqlDbType.integer:
+      case DpgsqlDbType.integer:
         return _oidHandlers[Oid.int4];
-      case NpgsqlDbType.json:
+      case DpgsqlDbType.json:
         return _oidHandlers[Oid.json];
-      case NpgsqlDbType.jsonb:
+      case DpgsqlDbType.jsonb:
         return _oidHandlers[Oid.jsonb];
-      case NpgsqlDbType.line:
+      case DpgsqlDbType.line:
         return _oidHandlers[Oid.line];
-      case NpgsqlDbType.lSeg:
+      case DpgsqlDbType.lSeg:
         return _oidHandlers[Oid.lseg];
-      case NpgsqlDbType.money:
+      case DpgsqlDbType.money:
         return _oidHandlers[Oid.money];
-      case NpgsqlDbType.numeric:
+      case DpgsqlDbType.numeric:
         return _oidHandlers[Oid.numeric];
-      case NpgsqlDbType.path:
+      case DpgsqlDbType.path:
         return _oidHandlers[Oid.path];
-      case NpgsqlDbType.point:
+      case DpgsqlDbType.point:
         return _oidHandlers[Oid.point];
-      case NpgsqlDbType.polygon:
+      case DpgsqlDbType.polygon:
         return _oidHandlers[Oid.polygon];
-      case NpgsqlDbType.real:
+      case DpgsqlDbType.real:
         return _oidHandlers[Oid.float4];
-      case NpgsqlDbType.smallint:
+      case DpgsqlDbType.smallint:
         return _oidHandlers[Oid.int2];
-      case NpgsqlDbType.text:
+      case DpgsqlDbType.text:
         return _oidHandlers[Oid.text];
-      case NpgsqlDbType.time:
+      case DpgsqlDbType.time:
         return _oidHandlers[Oid.time];
-      case NpgsqlDbType.timestamp:
+      case DpgsqlDbType.timestamp:
         return _oidHandlers[Oid.timestamp];
-      case NpgsqlDbType.timestampTz:
+      case DpgsqlDbType.timestampTz:
         return _oidHandlers[Oid.timestamptz];
-      case NpgsqlDbType.uuid:
+      case DpgsqlDbType.uuid:
         return _oidHandlers[Oid.uuid];
-      case NpgsqlDbType.varbit:
+      case DpgsqlDbType.varbit:
         return _oidHandlers[Oid.varbit];
-      case NpgsqlDbType.varchar:
+      case DpgsqlDbType.varchar:
         return _oidHandlers[Oid.varchar];
-      case NpgsqlDbType.xml:
+      case DpgsqlDbType.xml:
         return _oidHandlers[Oid.xml];
-      case NpgsqlDbType.unknown:
+      case DpgsqlDbType.unknown:
         return _oidHandlers[Oid.unknown];
-      case NpgsqlDbType.integerRange:
+      case DpgsqlDbType.integerRange:
         return resolve(Oid.int4range);
-      case NpgsqlDbType.bigIntRange:
+      case DpgsqlDbType.bigIntRange:
         return resolve(Oid.int8range);
-      case NpgsqlDbType.numRange:
+      case DpgsqlDbType.numRange:
         return resolve(Oid.numrange);
-      case NpgsqlDbType.tsRange:
+      case DpgsqlDbType.tsRange:
         return resolve(Oid.tsrange);
-      case NpgsqlDbType.tsTzRange:
+      case DpgsqlDbType.tsTzRange:
         return resolve(Oid.tstzrange);
-      case NpgsqlDbType.dateRange:
+      case DpgsqlDbType.dateRange:
         return resolve(Oid.daterange);
     }
   }

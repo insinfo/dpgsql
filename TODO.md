@@ -1,5 +1,34 @@
 # TODO dpgsql
 
+## Progresso 2026-06-26 (API Dpgsql + docs + testes reais)
+
+- Renomeada a API publica de `Npgsql*` para `Dpgsql*` no codigo do pacote, testes e benchmarks, incluindo conexao, comandos, data source, parametros, transacoes, batch, tipos, schema e replicacao.
+- Arquivos internos remanescentes `npgsql_*.dart` foram renomeados para `dpgsql_*.dart`, mantendo o pacote alinhado ao nome `dpgsql`.
+- Criado `README.md` em ingles com badge do GitHub Actions, instalacao via Git, quick start, pooling, prepared statements, batch/pipeline, COPY, notifications, encodings, testes reais, benchmarks e notas de producao.
+- Workflow `.github/workflows/dart-testing.yml` atualizado para Dart 3.6.2 e preparacao de locale `pt_BR.CP1252`, preservando matriz real PostgreSQL 14/15/16/17.
+- Portados/adaptados mais testes reais inspirados em `C:\MyDartProjects\postgresql-fork\test`:
+  - `real_notification_test.dart` cobre `LISTEN/NOTIFY`;
+  - `real_error_recovery_test.dart` valida recuperacao apos `ErrorResponse` e rollback apos erro em transacao;
+  - `real_type_decode_test.dart` cobre decodificacao real de escalares, `bytea`, array e `numeric`.
+- Corrigido dreno de protocolo quando `ErrorResponse` ocorre durante `DpgsqlDataReaderImpl.init()`, garantindo que `ReadyForQuery` seja consumido antes de relancar a excecao.
+- Implementado parsing texto de `bytea` nos formatos PostgreSQL hex (`\x...`) e escape legado.
+- Implementado `DpgsqlDecimal.parse()` para `numeric` em texto, convertendo para a representacao base-10000 usada pelo caminho binario.
+
+## Progresso 2026-06-26 (encodings PostgreSQL + codecs internos)
+
+- Lido `referencias/npgsql/test/Npgsql.Tests/ConnectionTests.cs`, especialmente os cenarios `Client_encoding_*` e `Non_UTF8_Encoding`.
+- `NpgsqlConnectionStringBuilder` separa agora `Encoding` (codec local do driver, estilo Npgsql) de `Client Encoding`/`PGCLIENTENCODING` (valor enviado ao PostgreSQL no startup).
+- Implementado mapeamento de aliases PostgreSQL para codecs internos ja existentes:
+  - `UTF8`, `SQL_ASCII`, `LATIN1-10`, `ISO_8859_5-8`;
+  - `WIN1250-1254`, `WIN1256`;
+  - `KOI8R`, `KOI8U`, `BIG5`, `GBK`;
+  - aliases comuns como `windows-1252`, `KOI8-R`, `ISO-8859-5`.
+- Encodings PostgreSQL sem codec local real no repo agora falham cedo com `UnsupportedError`, evitando fallback silencioso para UTF8.
+- `NpgsqlConnector` passou a enviar `client_encoding` no `StartupMessage`; conexoes normais, pool e replicacao propagam `postgresClientEncoding`.
+- Adicionado teste real `real_client_encoding_test.dart` validando `SHOW client_encoding = LATIN1` e roundtrip de texto nao-ASCII.
+- Testes unitarios de encoding atualizados para verificar `WIN1252` real, aliases PostgreSQL e separacao `Encoding=windows-1252;Client Encoding=sql-ascii`.
+- Validacao local: `dart analyze` sem issues e `timeout-cli.exe 30 dart test` passando (`+103 ~2`).
+
 ## Progresso 2026-06-26 (CI PostgreSQL + testes reais parametrizados)
 
 - Lido padrao de testes do Npgsql em `referencias/npgsql/test/Npgsql.Tests/TestUtil.cs`: connection string centralizada via variavel de ambiente (`NPGSQL_TEST_DB`) com fallback local.

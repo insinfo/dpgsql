@@ -106,7 +106,7 @@ void main() {
       });
     });
 
-    final conn = NpgsqlConnection('Host=localhost; Port=$port');
+    final conn = DpgsqlConnection('Host=localhost; Port=$port');
     await conn.open();
 
     final reader = await conn.executeReader('SELECT 42');

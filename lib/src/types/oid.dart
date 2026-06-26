@@ -1,5 +1,5 @@
 /// Common PostgreSQL OIDs.
-/// Porting Npgsql definitions or standard Postgres OIDs.
+/// Porting Dpgsql definitions or standard Postgres OIDs.
 abstract class Oid {
   static const int bool = 16;
   static const int bytea = 17;

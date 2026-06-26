@@ -11,7 +11,7 @@ Future<void> main() async {
 
   final connect = await _benchmarkConnect(connectionString, config);
 
-  final connection = NpgsqlConnection(connectionString);
+  final connection = DpgsqlConnection(connectionString);
   await connection.open();
   try {
     await _ensureBenchmarkRows(connection, config.tableName, config.maxRows);
@@ -80,10 +80,10 @@ Future<void> main() async {
 }
 
 Future<Map<String, dynamic>> _serverInfo(String connectionString) async {
-  final connection = NpgsqlConnection(connectionString);
+  final connection = DpgsqlConnection(connectionString);
   await connection.open();
   try {
-    final command = NpgsqlCommand(
+    final command = DpgsqlCommand(
       'SELECT version(), current_setting(\'server_version_num\')',
       connection,
     );
@@ -110,7 +110,7 @@ Future<_Metric> _benchmarkConnect(
 ) async {
   final sw = Stopwatch()..start();
   for (var i = 0; i < config.connectIterations; i++) {
-    final connection = NpgsqlConnection(connectionString);
+    final connection = DpgsqlConnection(connectionString);
     await connection.open();
     await connection.close();
   }
@@ -120,10 +120,10 @@ Future<_Metric> _benchmarkConnect(
 }
 
 Future<_Metric> _benchmarkSelectOne(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   _BenchConfig config,
 ) async {
-  final command = NpgsqlCommand('SELECT 1', connection);
+  final command = DpgsqlCommand('SELECT 1', connection);
   var checksum = await _drainScalar(command, config.warmupIterations);
 
   final sw = Stopwatch()..start();
@@ -134,10 +134,10 @@ Future<_Metric> _benchmarkSelectOne(
 }
 
 Future<_Metric> _benchmarkParameter(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   _BenchConfig config,
 ) async {
-  final parameters = NpgsqlParameterCollection()
+  final parameters = DpgsqlParameterCollection()
     ..addWithValue('a', 40)
     ..addWithValue('b', 2);
 
@@ -161,10 +161,10 @@ Future<_Metric> _benchmarkParameter(
 }
 
 Future<_Metric> _benchmarkPrepared(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   _BenchConfig config,
 ) async {
-  final command = NpgsqlCommand('SELECT @a::int + @b::int', connection);
+  final command = DpgsqlCommand('SELECT @a::int + @b::int', connection);
   command.parameters.addWithValue('a', 40);
   command.parameters.addWithValue('b', 2);
   await command.prepare();
@@ -179,12 +179,12 @@ Future<_Metric> _benchmarkPrepared(
 }
 
 Future<Map<String, dynamic>> _benchmarkResultSet(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   String tableName,
   int rowsPerQuery,
   _BenchConfig config,
 ) async {
-  final command = NpgsqlCommand(
+  final command = DpgsqlCommand(
     'SELECT id, name, amount, created_at, payload '
     'FROM $tableName ORDER BY id LIMIT $rowsPerQuery',
     connection,
@@ -214,12 +214,12 @@ Future<Map<String, dynamic>> _benchmarkResultSet(
 }
 
 Future<Map<String, dynamic>> _benchmarkResultSetDrain(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   String tableName,
   int rowsPerQuery,
   _BenchConfig config,
 ) async {
-  final command = NpgsqlCommand(
+  final command = DpgsqlCommand(
     'SELECT id, name, amount, created_at, payload '
     'FROM $tableName ORDER BY id LIMIT $rowsPerQuery',
     connection,
@@ -243,12 +243,12 @@ Future<Map<String, dynamic>> _benchmarkResultSetDrain(
 }
 
 Future<Map<String, dynamic>> _benchmarkResultSetSimple(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   String tableName,
   int rowsPerQuery,
   _BenchConfig config,
 ) async {
-  final command = NpgsqlCommand(
+  final command = DpgsqlCommand(
     'SELECT id, name, payload FROM $tableName ORDER BY id LIMIT $rowsPerQuery',
     connection,
   );
@@ -293,7 +293,7 @@ Map<String, dynamic> _resultSetMetric({
   };
 }
 
-Future<int> _drainScalar(NpgsqlCommand command, int iterations) async {
+Future<int> _drainScalar(DpgsqlCommand command, int iterations) async {
   var checksum = 0;
   for (var i = 0; i < iterations; i++) {
     final reader = await command.executeReader();
@@ -309,9 +309,9 @@ Future<int> _drainScalar(NpgsqlCommand command, int iterations) async {
 }
 
 Future<int> _drainScalarSql(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   String sql,
-  NpgsqlParameterCollection parameters,
+  DpgsqlParameterCollection parameters,
   int iterations,
 ) async {
   var checksum = 0;
@@ -328,7 +328,7 @@ Future<int> _drainScalarSql(
   return checksum;
 }
 
-Future<int> _drainRows(NpgsqlCommand command, int iterations) async {
+Future<int> _drainRows(DpgsqlCommand command, int iterations) async {
   var checksum = 0;
   for (var i = 0; i < iterations; i++) {
     final reader = await command.executeReader();
@@ -347,7 +347,7 @@ Future<int> _drainRows(NpgsqlCommand command, int iterations) async {
   return checksum;
 }
 
-Future<int> _drainRowsOnly(NpgsqlCommand command, int iterations) async {
+Future<int> _drainRowsOnly(DpgsqlCommand command, int iterations) async {
   var checksum = 0;
   for (var i = 0; i < iterations; i++) {
     final reader = await command.executeReader();
@@ -362,7 +362,7 @@ Future<int> _drainRowsOnly(NpgsqlCommand command, int iterations) async {
   return checksum;
 }
 
-Future<int> _drainRowsSimple(NpgsqlCommand command, int iterations) async {
+Future<int> _drainRowsSimple(DpgsqlCommand command, int iterations) async {
   var checksum = 0;
   for (var i = 0; i < iterations; i++) {
     final reader = await command.executeReader();
@@ -380,11 +380,11 @@ Future<int> _drainRowsSimple(NpgsqlCommand command, int iterations) async {
 }
 
 Future<void> _ensureBenchmarkRows(
-  NpgsqlConnection connection,
+  DpgsqlConnection connection,
   String tableName,
   int targetRows,
 ) async {
-  await NpgsqlCommand('''
+  await DpgsqlCommand('''
 CREATE TABLE IF NOT EXISTS $tableName (
   id INTEGER PRIMARY KEY,
   name VARCHAR(64) NOT NULL,
@@ -394,7 +394,7 @@ CREATE TABLE IF NOT EXISTS $tableName (
 )
 ''', connection).executeNonQuery();
 
-  final countReader = await NpgsqlCommand(
+  final countReader = await DpgsqlCommand(
     'SELECT COUNT(*) FROM $tableName',
     connection,
   ).executeReader();
@@ -411,7 +411,7 @@ CREATE TABLE IF NOT EXISTS $tableName (
     return;
   }
 
-  await NpgsqlCommand('TRUNCATE TABLE $tableName', connection)
+  await DpgsqlCommand('TRUNCATE TABLE $tableName', connection)
       .executeNonQuery();
 
   const batchSize = 500;
@@ -430,7 +430,7 @@ CREATE TABLE IF NOT EXISTS $tableName (
       );
     }
 
-    await NpgsqlCommand(
+    await DpgsqlCommand(
       'INSERT INTO $tableName (id, name, amount, created_at, payload) '
       'VALUES ${values.join(',')}',
       connection,

@@ -1,8 +1,8 @@
-import 'npgsql_exception.dart';
+import 'dpgsql_exception.dart';
 
 /// The exception that is thrown when the PostgreSQL backend reports an error.
 /// Porting PostgresException.cs
-class PostgresException extends NpgsqlException {
+class PostgresException extends DpgsqlException {
   PostgresException({
     required this.severity,
     required this.invariantSeverity,
@@ -66,7 +66,7 @@ class PostgresException extends NpgsqlException {
     );
   }
 
-  // Helper to format the message string similar to Npgsql
+  // Helper to format the message string similar to Dpgsql
   static String _formatMessage(
       String sqlState, String messageText, int position, String? detail) {
     var baseMessage = '$sqlState: $messageText';

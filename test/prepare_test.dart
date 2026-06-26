@@ -24,7 +24,7 @@ void main() {
       // Prepare Select
       final cmd =
           conn.createCommand('SELECT val FROM table_prep WHERE id = @id');
-      cmd.parameters.add(NpgsqlParameter('id', 1)); // Initial value
+      cmd.parameters.add(DpgsqlParameter('id', 1)); // Initial value
 
       print('Preparing command...');
       await cmd.prepare();

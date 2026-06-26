@@ -4,7 +4,7 @@ import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
 
 void main() {
-  test('NpgsqlDataSource reuses connections', () async {
+  test('DpgsqlDataSource reuses connections', () async {
     int connectionCount = 0;
 
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
@@ -23,7 +23,7 @@ void main() {
       });
     });
 
-    final dataSource = NpgsqlDataSource('Host=localhost; Port=$port');
+    final dataSource = DpgsqlDataSource('Host=localhost; Port=$port');
 
     // First connection
     final conn1 = await dataSource.openConnection();

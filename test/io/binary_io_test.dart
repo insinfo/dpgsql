@@ -136,7 +136,8 @@ Future<void> _withSocketPair(
   Future<void> Function(Socket client, Socket serverSide) body,
 ) async {
   final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-  final client = await Socket.connect(InternetAddress.loopbackIPv4, server.port);
+  final client =
+      await Socket.connect(InternetAddress.loopbackIPv4, server.port);
   final serverSide = await server.first;
 
   try {

@@ -137,10 +137,10 @@ Future<Duration> _runDpgsqlBenchmark(String connString,
     {required int warmup,
     required int iterations,
     required String queryType}) async {
-  final connection = dpgsql.NpgsqlConnection(connString);
+  final connection = dpgsql.DpgsqlConnection(connString);
   await connection.open();
   final query = _getQuery(queryType);
-  final command = dpgsql.NpgsqlCommand(query, connection);
+  final command = dpgsql.DpgsqlCommand(query, connection);
 
   await _exerciseDpgsql(command, warmup);
   final sw = Stopwatch()..start();
@@ -151,7 +151,7 @@ Future<Duration> _runDpgsqlBenchmark(String connString,
   return sw.elapsed;
 }
 
-Future<void> _exerciseDpgsql(dpgsql.NpgsqlCommand command, int count) async {
+Future<void> _exerciseDpgsql(dpgsql.DpgsqlCommand command, int count) async {
   for (var i = 0; i < count; i++) {
     final reader = await command.executeReader();
     try {
@@ -168,7 +168,7 @@ Future<Duration> _runPostgresBenchmark(String connString,
     {required int warmup,
     required int iterations,
     required String queryType}) async {
-  final builder = dpgsql.NpgsqlConnectionStringBuilder(connString);
+  final builder = dpgsql.DpgsqlConnectionStringBuilder(connString);
   final endpoint = pg.Endpoint(
     host: builder.host,
     port: builder.port,
@@ -231,12 +231,12 @@ int _resolveRecordCount(List<String> args) {
 }
 
 Future<void> _setupDatabase(String connString, int recordCount) async {
-  final connection = dpgsql.NpgsqlConnection(connString);
+  final connection = dpgsql.DpgsqlConnection(connString);
   await connection.open();
 
   try {
     // Verificar se a tabela já existe e tem dados
-    final checkCmd = dpgsql.NpgsqlCommand(
+    final checkCmd = dpgsql.DpgsqlCommand(
         "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = 'benchmark_data')",
         connection);
     final checkReader = await checkCmd.executeReader();
@@ -248,7 +248,7 @@ Future<void> _setupDatabase(String connString, int recordCount) async {
 
     int currentCount = 0;
     if (tableExists) {
-      final countCmd = dpgsql.NpgsqlCommand(
+      final countCmd = dpgsql.DpgsqlCommand(
           'SELECT COUNT(*) FROM benchmark_data', connection);
       final countReader = await countCmd.executeReader();
       if (await countReader.read()) {
@@ -277,7 +277,7 @@ Future<void> _setupDatabase(String connString, int recordCount) async {
 
     // Verificar contagem final
     final finalCountCmd =
-        dpgsql.NpgsqlCommand('SELECT COUNT(*) FROM benchmark_data', connection);
+        dpgsql.DpgsqlCommand('SELECT COUNT(*) FROM benchmark_data', connection);
     final finalReader = await finalCountCmd.executeReader();
     int finalCount = 0;
     if (await finalReader.read()) {
@@ -290,7 +290,7 @@ Future<void> _setupDatabase(String connString, int recordCount) async {
   }
 }
 
-Future<void> _createTable(dpgsql.NpgsqlConnection connection) async {
+Future<void> _createTable(dpgsql.DpgsqlConnection connection) async {
   final createTableSql = '''
     DROP TABLE IF EXISTS benchmark_data CASCADE;
     
@@ -313,12 +313,12 @@ Future<void> _createTable(dpgsql.NpgsqlConnection connection) async {
     CREATE INDEX idx_benchmark_data_created_at ON benchmark_data(created_at);
   ''';
 
-  final command = dpgsql.NpgsqlCommand(createTableSql, connection);
+  final command = dpgsql.DpgsqlCommand(createTableSql, connection);
   await command.executeNonQuery();
 }
 
 Future<void> _insertRecords(
-    dpgsql.NpgsqlConnection connection, int count) async {
+    dpgsql.DpgsqlConnection connection, int count) async {
   const batchSize = 1000;
   final batches = (count / batchSize).ceil();
 
@@ -326,7 +326,7 @@ Future<void> _insertRecords(
     final currentBatchSize =
         (b == batches - 1) ? count - (b * batchSize) : batchSize;
 
-    final batch = dpgsql.NpgsqlBatch(connection);
+    final batch = dpgsql.DpgsqlBatch(connection);
 
     for (var i = 0; i < currentBatchSize; i++) {
       final insertCmd = batch.createBatchCommand('''

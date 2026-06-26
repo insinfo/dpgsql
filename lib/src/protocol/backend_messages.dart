@@ -3,7 +3,7 @@ import 'dart:typed_data';
 import '../io/binary_input.dart';
 import 'postgres_message.dart';
 
-/// Interface para mensagens de backend (como em Npgsql).
+/// Interface para mensagens de backend (como em Dpgsql).
 abstract class IBackendMessage {
   BackendMessageCode get code;
 }

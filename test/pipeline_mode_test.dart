@@ -9,7 +9,7 @@ void main() {
     // Note: This is a unit test of the API structure, not integration with a real server
 
     // Create a connection (this would normally connect to a real server)
-    final conn = NpgsqlConnection('Host=localhost;Port=5432;Database=test');
+    final conn = DpgsqlConnection('Host=localhost;Port=5432;Database=test');
 
     // Demonstrate API exists
     expect(conn.inPipelineMode, isFalse);
@@ -36,7 +36,7 @@ void main() {
     // This test documents the expected usage pattern
 
     void exampleUsage() async {
-      final conn = NpgsqlConnection('Host=localhost;Database=test');
+      final conn = DpgsqlConnection('Host=localhost;Database=test');
       await conn.open();
 
       try {
@@ -47,7 +47,7 @@ void main() {
         // for (var i = 0; i < 10; i++) {
         //   conn.executeQueryPipelined(
         //     sql: 'SELECT \$1::int',
-        //     parameters: NpgsqlParameterCollection()..addWithValue('p', i),
+        //     parameters: DpgsqlParameterCollection()..addWithValue('p', i),
         //   );
         // }
 
@@ -107,29 +107,8 @@ void main() {
           0,
           0
         ];
-        final dataRow1 = [
-          0x44,
-          0,
-          0,
-          0,
-          11,
-          0,
-          1,
-          0,
-          0,
-          0,
-          1,
-          49
-        ];
-        final cmdComplete1 = [
-          0x43,
-          0,
-          0,
-          0,
-          13,
-          ...('SELECT 1'.codeUnits),
-          0
-        ];
+        final dataRow1 = [0x44, 0, 0, 0, 11, 0, 1, 0, 0, 0, 1, 49];
+        final cmdComplete1 = [0x43, 0, 0, 0, 13, ...('SELECT 1'.codeUnits), 0];
 
         final rowDesc2 = [
           0x54,
@@ -160,29 +139,8 @@ void main() {
           0,
           0
         ];
-        final dataRow2 = [
-          0x44,
-          0,
-          0,
-          0,
-          11,
-          0,
-          1,
-          0,
-          0,
-          0,
-          1,
-          50
-        ];
-        final cmdComplete2 = [
-          0x43,
-          0,
-          0,
-          0,
-          13,
-          ...('SELECT 1'.codeUnits),
-          0
-        ];
+        final dataRow2 = [0x44, 0, 0, 0, 11, 0, 1, 0, 0, 0, 1, 50];
+        final cmdComplete2 = [0x43, 0, 0, 0, 13, ...('SELECT 1'.codeUnits), 0];
         final ready = [0x5A, 0, 0, 0, 5, 0x49];
 
         client.add([
@@ -209,8 +167,10 @@ void main() {
             if (buffer.length < 4) {
               return;
             }
-            final length =
-                (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+            final length = (buffer[0] << 24) |
+                (buffer[1] << 16) |
+                (buffer[2] << 8) |
+                buffer[3];
             if (buffer.length < length) {
               return;
             }
@@ -227,8 +187,10 @@ void main() {
           }
 
           final type = buffer[0];
-          final length =
-              (buffer[1] << 24) | (buffer[2] << 16) | (buffer[3] << 8) | buffer[4];
+          final length = (buffer[1] << 24) |
+              (buffer[2] << 16) |
+              (buffer[3] << 8) |
+              buffer[4];
           final total = 1 + length;
 
           if (buffer.length < total) {
@@ -249,7 +211,7 @@ void main() {
       });
     });
 
-    final conn = NpgsqlConnection('Host=localhost; Port=$port');
+    final conn = DpgsqlConnection('Host=localhost; Port=$port');
     await conn.open();
 
     conn.enterPipelineMode();
@@ -279,7 +241,7 @@ void main() {
     await server.close();
   });
 
-  test('Pipeline Mode - NpgsqlCommand integration helper', () async {
+  test('Pipeline Mode - DpgsqlCommand integration helper', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -320,29 +282,8 @@ void main() {
           0,
           0
         ];
-        final dataRow1 = [
-          0x44,
-          0,
-          0,
-          0,
-          11,
-          0,
-          1,
-          0,
-          0,
-          0,
-          1,
-          49
-        ];
-        final cmdComplete1 = [
-          0x43,
-          0,
-          0,
-          0,
-          13,
-          ...('SELECT 1'.codeUnits),
-          0
-        ];
+        final dataRow1 = [0x44, 0, 0, 0, 11, 0, 1, 0, 0, 0, 1, 49];
+        final cmdComplete1 = [0x43, 0, 0, 0, 13, ...('SELECT 1'.codeUnits), 0];
 
         final rowDesc2 = [
           0x54,
@@ -373,29 +314,8 @@ void main() {
           0,
           0
         ];
-        final dataRow2 = [
-          0x44,
-          0,
-          0,
-          0,
-          11,
-          0,
-          1,
-          0,
-          0,
-          0,
-          1,
-          50
-        ];
-        final cmdComplete2 = [
-          0x43,
-          0,
-          0,
-          0,
-          13,
-          ...('SELECT 1'.codeUnits),
-          0
-        ];
+        final dataRow2 = [0x44, 0, 0, 0, 11, 0, 1, 0, 0, 0, 1, 50];
+        final cmdComplete2 = [0x43, 0, 0, 0, 13, ...('SELECT 1'.codeUnits), 0];
         final ready = [0x5A, 0, 0, 0, 5, 0x49];
 
         client.add([
@@ -422,8 +342,10 @@ void main() {
             if (buffer.length < 4) {
               return;
             }
-            final length =
-                (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+            final length = (buffer[0] << 24) |
+                (buffer[1] << 16) |
+                (buffer[2] << 8) |
+                buffer[3];
             if (buffer.length < length) {
               return;
             }
@@ -440,8 +362,10 @@ void main() {
           }
 
           final type = buffer[0];
-          final length =
-              (buffer[1] << 24) | (buffer[2] << 16) | (buffer[3] << 8) | buffer[4];
+          final length = (buffer[1] << 24) |
+              (buffer[2] << 16) |
+              (buffer[3] << 8) |
+              buffer[4];
           final total = 1 + length;
 
           if (buffer.length < total) {
@@ -462,7 +386,7 @@ void main() {
       });
     });
 
-    final conn = NpgsqlConnection('Host=localhost; Port=$port');
+    final conn = DpgsqlConnection('Host=localhost; Port=$port');
     await conn.open();
 
     final cmd1 = conn.createCommand('SELECT @value::int');

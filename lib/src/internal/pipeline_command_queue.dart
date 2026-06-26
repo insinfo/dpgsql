@@ -2,7 +2,7 @@ import 'dart:collection';
 import 'pending_command.dart';
 
 /// Manages a queue of pending commands in pipeline mode.
-/// Porting concepts from Npgsql's pipeline management.
+/// Porting concepts from Dpgsql's pipeline management.
 class PipelineCommandQueue {
   final Queue<PendingCommand> _queue = Queue<PendingCommand>();
   bool _inPipelineMode = false;

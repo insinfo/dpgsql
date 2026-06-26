@@ -40,7 +40,7 @@ void main() {
   });
 }
 
-Future<int> _preparedStatementCount(NpgsqlConnection conn) async {
+Future<int> _preparedStatementCount(DpgsqlConnection conn) async {
   return await executeScalar(
         conn,
         r"SELECT count(*)::int FROM pg_prepared_statements WHERE name LIKE '\_p%' ESCAPE '\'",
@@ -49,7 +49,7 @@ Future<int> _preparedStatementCount(NpgsqlConnection conn) async {
       0;
 }
 
-Future<String> _singlePreparedStatement(NpgsqlConnection conn) async {
+Future<String> _singlePreparedStatement(DpgsqlConnection conn) async {
   return await executeScalar(
         conn,
         r"SELECT statement FROM pg_prepared_statements WHERE name LIKE '\_p%' ESCAPE '\' ORDER BY name LIMIT 1",

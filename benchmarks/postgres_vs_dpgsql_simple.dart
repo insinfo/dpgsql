@@ -82,9 +82,9 @@ int _resolveWarmup() {
 
 Future<Duration> _runDpgsqlBenchmark(String connString,
     {required int warmup, required int iterations}) async {
-  final connection = dpgsql.NpgsqlConnection(connString);
+  final connection = dpgsql.DpgsqlConnection(connString);
   await connection.open();
-  final command = dpgsql.NpgsqlCommand('SELECT 1', connection);
+  final command = dpgsql.DpgsqlCommand('SELECT 1', connection);
 
   await _exerciseDpgsql(command, warmup);
   final sw = Stopwatch()..start();
@@ -95,7 +95,7 @@ Future<Duration> _runDpgsqlBenchmark(String connString,
   return sw.elapsed;
 }
 
-Future<void> _exerciseDpgsql(dpgsql.NpgsqlCommand command, int count) async {
+Future<void> _exerciseDpgsql(dpgsql.DpgsqlCommand command, int count) async {
   for (var i = 0; i < count; i++) {
     final reader = await command.executeReader();
     try {
@@ -110,7 +110,7 @@ Future<void> _exerciseDpgsql(dpgsql.NpgsqlCommand command, int count) async {
 
 Future<Duration> _runPostgresBenchmark(String connString,
     {required int warmup, required int iterations}) async {
-  final builder = dpgsql.NpgsqlConnectionStringBuilder(connString);
+  final builder = dpgsql.DpgsqlConnectionStringBuilder(connString);
   final endpoint = pg.Endpoint(
     host: builder.host,
     port: builder.port,

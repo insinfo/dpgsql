@@ -28,7 +28,7 @@ List<int> _buildErrorResponse(String message) {
 }
 
 void main() {
-  test('NpgsqlBatch executes multiple commands in pipeline', () async {
+  test('DpgsqlBatch executes multiple commands in pipeline', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -155,7 +155,7 @@ void main() {
       });
     });
 
-    final conn = NpgsqlConnection('Host=localhost; Port=$port');
+    final conn = DpgsqlConnection('Host=localhost; Port=$port');
     await conn.open();
 
     final batch = conn.createBatch();
@@ -189,7 +189,7 @@ void main() {
     await server.close();
   });
 
-  test('NpgsqlBatch pipeline abort recovers after ErrorResponse', () async {
+  test('DpgsqlBatch pipeline abort recovers after ErrorResponse', () async {
     final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     final port = server.port;
 
@@ -259,7 +259,7 @@ void main() {
       });
     });
 
-    final conn = NpgsqlConnection('Host=localhost; Port=$port');
+    final conn = DpgsqlConnection('Host=localhost; Port=$port');
     await conn.open();
 
     final batch = conn.createBatch();

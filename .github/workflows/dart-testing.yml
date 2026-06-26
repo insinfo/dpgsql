@@ -13,7 +13,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        sdk: [3.6.0]
+        sdk: [3.6.2]
         postgres-version: ['14', '15', '16', '17']
 
     services:
@@ -35,6 +35,18 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Configure locales
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tzdata locales postgresql-client
+          sudo localedef -f CP1252 -i pt_BR pt_BR.CP1252 || true
+          echo 'pt_BR.CP1252 CP1252' | sudo tee -a /etc/locale.gen > /dev/null
+          sudo locale-gen pt_BR.UTF-8
+          sudo locale-gen pt_BR
+          sudo locale-gen pt_BR.CP1252 || true
+          locale -a
+          locale
+
       - name: Setup Dart SDK
         uses: dart-lang/setup-dart@v1
         with:
@@ -45,11 +57,6 @@ jobs:
 
       - name: Analyze Dart code
         run: dart analyze
-
-      - name: Install PostgreSQL client
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client
 
       - name: Verify PostgreSQL installation
         env:

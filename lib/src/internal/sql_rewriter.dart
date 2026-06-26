@@ -1,22 +1,22 @@
-import '../npgsql_parameter_collection.dart';
-import '../npgsql_parameter.dart';
+import '../dpgsql_parameter_collection.dart';
+import '../dpgsql_parameter.dart';
 
 class RewrittenSql {
   final String sql;
-  final List<NpgsqlParameter> orderedParameters;
+  final List<DpgsqlParameter> orderedParameters;
 
   RewrittenSql(this.sql, this.orderedParameters);
 }
 
 class SqlRewriter {
   static RewrittenSql rewrite(
-      String sql, NpgsqlParameterCollection parameters) {
+      String sql, DpgsqlParameterCollection parameters) {
     if (parameters.isEmpty) {
       return RewrittenSql(sql, []);
     }
 
     final sb = StringBuffer();
-    final orderedParams = <NpgsqlParameter>[];
+    final orderedParams = <DpgsqlParameter>[];
     final paramIndexMap = <String, int>{}; // Name -> Index (1-based)
 
     int index = 0;

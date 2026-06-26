@@ -1,9 +1,9 @@
 import 'dart:typed_data';
 import 'dart:convert';
 import 'type_handler.dart';
-import 'npgsql_range.dart';
+import 'dpgsql_range.dart';
 
-class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
+class RangeHandler<T> extends TypeHandler<DpgsqlRange<T>> {
   RangeHandler(this.oid, this.elementHandler);
 
   @override
@@ -11,20 +11,20 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
   final TypeHandler<T> elementHandler;
 
   @override
-  NpgsqlRange<T> read(Uint8List buffer,
+  DpgsqlRange<T> read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       // TODO: Text parsing for ranges
       throw UnimplementedError('Text parsing for Range not implemented');
     }
 
-    if (buffer.isEmpty) return NpgsqlRange.empty();
+    if (buffer.isEmpty) return DpgsqlRange.empty();
 
     final bd = ByteData.sublistView(buffer);
     final flags = buffer[0];
 
     final isEmpty = (flags & 0x01) != 0;
-    if (isEmpty) return NpgsqlRange<T>.empty();
+    if (isEmpty) return DpgsqlRange<T>.empty();
 
     final lowerBoundInclusive = (flags & 0x02) != 0;
     final upperBoundInclusive = (flags & 0x04) != 0;
@@ -55,7 +55,7 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
       }
     }
 
-    return NpgsqlRange<T>(
+    return DpgsqlRange<T>(
       lowerBound: lowerBound,
       upperBound: upperBound,
       lowerBoundInclusive: lowerBoundInclusive,
@@ -66,7 +66,7 @@ class RangeHandler<T> extends TypeHandler<NpgsqlRange<T>> {
   }
 
   @override
-  Uint8List write(NpgsqlRange<T> value, {Encoding encoding = utf8}) {
+  Uint8List write(DpgsqlRange<T> value, {Encoding encoding = utf8}) {
     if (value.isEmpty) {
       return Uint8List.fromList([0x01]);
     }
