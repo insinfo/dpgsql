@@ -1,5 +1,335 @@
+# TODO dpgsql
+
+## Progresso 2026-06-26 (CI PostgreSQL + testes reais parametrizados)
+
+- Lido padrao de testes do Npgsql em `referencias/npgsql/test/Npgsql.Tests/TestUtil.cs`: connection string centralizada via variavel de ambiente (`NPGSQL_TEST_DB`) com fallback local.
+- Criado `test/test_config.dart` com `realConnectionString()`, `openRealConnectionOrSkip()` e `executeScalar()`, permitindo rodar testes reais tanto localmente quanto no GitHub Actions.
+- Testes reais migrados para usar configuracao por ambiente: prepare, auto-prepare, COPY IN/OUT, pipeline e integracao geral.
+- Adicionado teste real `real_pool_lifecycle_test.dart` validando que conexao fisica pooled preserva auto-prepared statements ao retornar para o pool.
+- Adicionado workflow GitHub Actions `.github/workflows/dart-testing.yml` com nome `Dart Testing`, matriz Dart 3.6.0 x PostgreSQL 14/15/16/17, `dart analyze` e `dart run test --concurrency 1`.
+- CI usa `DPGSQL_TEST_DB` apontando para um PostgreSQL real em service container (`dart_test`, usuario `dart`, senha `dart`), fazendo os testes reais falharem se o banco configurado estiver indisponivel.
+- Validacao local: `dart analyze` sem issues e `timeout-cli.exe 30 dart test` passando (`+99 ~2`).
+
+## Progresso 2026-06-26 (correcao + primeira otimizacao)
+
+- Corrigido bug de double rewrite em SQL parametrizado: `NpgsqlCommand` agora informa ao caminho normal que o SQL ja foi reescrito, evitando perda de parametros em comandos nao preparados com `@param`.
+- Adicionado teste real cobrindo `NpgsqlCommand('SELECT @a::int + @b::int')` sem `prepare()`.
+- `NpgsqlDataReaderImpl` passou a reutilizar o `TypeHandlerRegistry` do `NpgsqlConnector`, evitando construir um registry completo por reader.
+- `NpgsqlDataReaderImpl` agora cacheia handlers e formato texto/binario por coluna ao receber `RowDescription`, reduzindo lookup por `getValue()`.
+- `prepare()` e `executeReader()` no protocolo estendido agora coalescem `Parse/Bind/Describe/Execute` e flusham no `Sync`, reduzindo flushes no socket.
+- `NpgsqlConnector.executeReader()` agora resolve `TypeHandler` dos parametros uma unica vez e reaproveita para OIDs e serializacao.
+- Validacao: `dart analyze` sem issues e `timeout-cli.exe 30 dart test` passando (`+86 ~2`).
+- Benchmark curto local apos a rodada (`BENCH_ITERATIONS=100`, rows 10/1000): `dpgsql` melhorou em parametros/prepared, mas ainda fica atras de `php_pgsql`/`pdo_pgsql`; proxima prioridade e reduzir custo de leitura de result sets (`PgRow`/lazy decode/handlers).
+
+## Progresso 2026-06-26 (PgRow/lazy decode)
+
+- `DataRowMessage` deixou de materializar `List<Uint8List?>` no parse de cada linha.
+- Parser de `DataRow` agora guarda `payload + columnOffsets + columnLengths`, pulando bytes por offset em `MemoryBinaryInput`.
+- Getter `columns` continua existindo por compatibilidade, mas agora e lazy e so aloca quando chamado diretamente.
+- `NpgsqlDataReaderImpl` passou a decodificar colunas sob demanda a partir de offset/length, com cache por linha para acessos repetidos.
+- Adicionados fast paths no reader para tipos comuns (`int2/int4/int8`, `bool`, `text/varchar/bpchar/unknown`, `float4/float8`) evitando `Uint8List.sublistView` e lookup de handler nesses casos.
+- Validacao: `dart analyze` limpo e `timeout-cli.exe 30 dart test` passando (`+86 ~2`).
+- Benchmark curto local apos a rodada (`BENCH_ITERATIONS=100`, rows 10/1000): `rows_10` melhorou em relacao a amostras anteriores, mas `rows_1000` ainda segue muito atras do PHP; proximos gargalos provaveis sao `NUMERIC`/`TIMESTAMP`, overhead async por mensagem e comparacao de benchmark com conversoes `toString()` em tipos complexos.
+
+## Progresso 2026-06-26 (benchmark justo + tipos complexos)
+
+- Benchmark comparativo agora separa result sets em:
+  - `drain`: apenas consumir linhas, sem acessar valores;
+  - `simple`: acessar `id/name/payload`;
+  - `full`: acessar `id/name/numeric/timestamp/payload`.
+- Scripts PHP (`pgsql` e `pdo_pgsql`) foram atualizados para emitir as mesmas tres familias de result set.
+- `compare_benchmarks.dart` agora imprime tabelas separadas para `drain`, `simple` e `full`, evitando conclusoes erradas a partir de um unico `rows_1000`.
+- `NpgsqlDecimal.toString()` deixou de retornar representacao debug e passou a formatar o valor numerico base-10000.
+- `NpgsqlDataReaderImpl` ganhou fast paths binarios para `timestamp/timestamptz` e `numeric`, evitando dispatch generico e `ByteData.sublistView` nesses tipos.
+- Validacao: `dart analyze` limpo e `timeout-cli.exe 30 dart test` passando (`+88 ~2`).
+- Benchmark curto local apos a rodada (`BENCH_ITERATIONS=100`, rows 10/1000): `full rows_1000` caiu de ~80-90 ms para ~15.7 ms/query; `simple rows_1000` ficou em ~5.8 ms/query e `drain rows_1000` em ~5.7 ms/query. O gargalo restante agora parece estar no overhead de parser/mensagens/async, nao apenas nos handlers complexos.
+
+## Progresso 2026-06-26 (benchmarks PHP async + Dart AOT)
+
+- `run_driver_comparison.ps1` agora compila `benchmarks/benchmark_dpgsql.dart` para AOT (`benchmarks/bin/benchmark_dpgsql.exe`) antes da medicao.
+- Adicionado `benchmarks/php_benchmark/composer.json` para instalar dependencias PHP de benchmark via Composer.
+- Adicionado benchmark `voryx/pgasync` (`benchmarks/benchmark_php_pgasync.php`), cobrindo caminho puro PHP/ReactPHP com protocolo PostgreSQL implementado pela biblioteca.
+- Adicionado benchmark `amphp/postgres` (`benchmarks/benchmark_php_amphp_postgres.php`), cobrindo o driver async do Amp. Observacao: a versao atual `amphp/postgres` 2.2.x exige `ext-pgsql` ou `pecl-pq`, entao nao e um fallback puro PHP nesta versao.
+- A comparacao agora roda cinco drivers: `dpgsql_aot`, `php_pgsql` (`ext-pgsql`), `php_pdo_pgsql`, `php_pgasync` e `php_amphp_postgres`.
+- Rodada curta local (`BENCH_ITERATIONS=3`, `rows_10`) validou execucao dos cinco drivers e gerou `benchmarks/reports/driver-comparison/summary.md`.
+
+## Progresso 2026-06-26 (pool robusto para producao)
+
+- `NpgsqlConnectionStringBuilder` passou a reconhecer keywords de pool no estilo Npgsql: `Pooling`, `Minimum Pool Size`, `Maximum Pool Size`, `Timeout`, `Connection Idle Lifetime` e `Connection Lifetime`.
+- `NpgsqlDataSource` foi refeito como pool com limite maximo real, contagem `busy/idle/total`, fila FIFO de espera e timeout de checkout.
+- `NpgsqlDataSource.warmup()` pre-cria conexoes ate `Minimum Pool Size` quando chamado explicitamente.
+- `dispose()` agora fecha idle, rejeita waiters pendentes e faz conexoes ocupadas serem descartadas ao retornarem.
+- Pool descarta conexoes vencidas por lifetime/idle lifetime e cria substitutas para chamadas esperando quando ha capacidade.
+- `poolStats` ganhou metricas de producao: `busy`, `total`, `waiting`, `max`, `min`, `waits` e `timeouts`.
+- Testes adicionados para parsing das opcoes de pool, espera quando `Maximum Pool Size` e atingido, timeout de checkout e warmup.
+- Validacao: `dart analyze` sem issues e `timeout-cli.exe 30 dart test` passando (`+92 ~2`).
+
+## Progresso 2026-06-26 (pool safety e pruning)
+
+- `NpgsqlConnection` agora rastreia readers ativos retornados pela API publica e transacao ativa.
+- Fechar uma conexao pooled com reader aberto, transacao ativa ou pipeline ainda ativo agora descarta o conector fisico em vez de devolve-lo ao pool.
+- `NpgsqlTransaction` passou a notificar a conexao quando `commit()`/`rollback()` completam, liberando o estado transacional para retorno seguro ao pool.
+- `NpgsqlDataSource` ganhou pruning periodico configuravel via `Connection Pruning Interval`.
+- Corrigida corrida de pool onde um waiter podia expirar enquanto uma nova conexao ainda estava abrindo; nesse caso o conector aberto volta para idle ou e descartado, sem vazar `busyCount`.
+- Testes adicionados para descarte de conector retornado com reader ativo e transacao ativa.
+- Validacao: `dart analyze` sem issues e `timeout-cli.exe 30 dart test` passando (`+94 ~2`).
+
+## Progresso 2026-06-26 (auto-prepare por conexao fisica)
+
+- `NpgsqlConnectionStringBuilder` passou a reconhecer `Max Auto Prepare` e `Auto Prepare Min Usages`, mantendo o default do Npgsql (`Max Auto Prepare=0`, desabilitado).
+- `NpgsqlConnector` integrou `PreparedStatementManager` por conexao fisica e reutiliza statements automaticamente no caminho parametrizado do extended protocol.
+- `PreparedStatementManager` agora promove candidatos por threshold, suporta `Auto Prepare Min Usages=1`, mantem slots LRU e registra statements expulsos para fechamento no backend.
+- Protocolo frontend ganhou `Close Statement` e `Close Portal`; o reader ignora `CloseComplete` no fluxo extended.
+- Auto-prepare agora fecha o statement preparado antigo no servidor antes de preparar um novo quando o cache LRU estoura, evitando vazamento em conexoes longas.
+- Pool preserva o cache por conector fisico quando ha prepared statements ativos, evitando `DISCARD ALL` nesse caso.
+- Teste real `test/auto_prepare_test.dart` valida auto-prepare na primeira execucao e LRU com `Max Auto Prepare=1`, confirmando que o servidor fica com apenas um statement preparado.
+- Validacao: `dart analyze` sem issues e `timeout-cli.exe 30 dart test` passando (`+98 ~2`).
+
+## Diagnostico de portabilidade vs Npgsql
+
+Referencia analisada: `referencias/npgsql/src/Npgsql` e `referencias/npgsql/test/Npgsql.Benchmarks`.
+
+Principais areas ainda faltando portar ou aprofundar:
+
+- `NpgsqlDataSourceBuilder`, `NpgsqlSlimDataSourceBuilder` e configuracao fluente de data source.
+- `NpgsqlCommandBuilder`, `NpgsqlDataAdapter`, `NpgsqlFactory` e compatibilidade ADO.NET equivalente.
+- `NpgsqlRawCopyStream` e APIs COPY stream-based/CSV/TEXT.
+- Tipos/conversores avancados: uuid, numeric/decimal dedicado, money, bit string, hstore, inet/cidr/macaddr, ltree, record/composite, enum, domain, multirange, cube, pg_lsn/log sequence number.
+- Replicacao fisica e pgoutput completo: streaming transactions, truncate/type/origin/messages prepared transaction e extensoes equivalentes.
+- Observabilidade: `NpgsqlMetricsOptions`, logging estruturado, tracing/OpenTelemetry e eventos diagnosticos.
+- Multi-host/failover: `NpgsqlMultiHostDataSource`, `TargetSessionAttributes`, load balance e retry de hosts.
+- Pool robusto no nivel Npgsql: ampliar validacoes de reset, warmup automatico opcional, observabilidade e comportamento sob falhas reais de rede.
+- Protocolo: portal reuse, describe portal completo, cancel/timeout granular e melhor tratamento de operacao em progresso.
+
+## Performance pendente
+
+- Reduzir custo fixo do caminho parametrizado/preparado: benchmark curto local ainda mostra `dpgsql_aot` atras de `php_pgsql`/`pdo_pgsql` em alguns cenarios pequenos.
+- Implementar fast path para `executeScalar`/`SELECT 1` sem criar reader completo quando o usuario pede um unico valor.
+- Melhorar `NpgsqlDataReaderImpl`: decodificacao lazy por coluna, evitar `Map<String,int>` em hot path quando acesso e por indice, e integrar `PgRow` zero-copy.
+- Revisar type handlers de `NUMERIC`, `TIMESTAMP`, `TEXT` e inteiros para reduzir alocacoes e conversoes texto/binario.
+- Reusar planos de execucao/SQL reescrito em `NpgsqlCommand` nao preparado quando a estrutura de parametros nao muda.
+- Aprofundar cache de prepared statements por conexao no pool: metricas publicas, cenarios de invalidez por schema change e benchmarks com auto-prepare ligado.
+- Adicionar benchmarks de COPY IN/OUT, batch com multiplos result sets, read rows 1/10/100/1000 e write parameter, espelhando `test/Npgsql.Benchmarks`.
+
+## Benchmarks criados
+
+Arquivos:
+
+- `benchmarks/benchmark_dpgsql.dart`
+- `benchmarks/benchmark_php_pgsql.php`
+- `benchmarks/benchmark_php_pdo_pgsql.php`
+- `benchmarks/benchmark_php_pgasync.php`
+- `benchmarks/benchmark_php_amphp_postgres.php`
+- `benchmarks/php_benchmark/composer.json`
+- `benchmarks/compare_benchmarks.dart`
+- `benchmarks/run_driver_comparison.ps1`
+
+Como rodar rapido:
+
+```powershell
+$env:BENCH_ITERATIONS='5'
+$env:BENCH_CONNECT_ITERATIONS='1'
+$env:BENCH_RESULTSET_ITERATIONS='1'
+$env:BENCH_WARMUP_ITERATIONS='1'
+$env:BENCH_RESULTSET_WARMUP_ITERATIONS='1'
+$env:BENCH_RESULTSET_SIZES='10'
+timeout-cli.exe 30 powershell -NoProfile -ExecutionPolicy Bypass -File benchmarks\run_driver_comparison.ps1 -TimeoutSeconds 30
+```
+
+Como rodar uma medicao mais util:
+
+```powershell
+$env:BENCH_ITERATIONS='2000'
+$env:BENCH_CONNECT_ITERATIONS='25'
+$env:BENCH_RESULTSET_ITERATIONS='20'
+$env:BENCH_WARMUP_ITERATIONS='200'
+$env:BENCH_RESULTSET_WARMUP_ITERATIONS='5'
+$env:BENCH_RESULTSET_SIZES='10,1000,10000'
+timeout-cli.exe 120 powershell -NoProfile -ExecutionPolicy Bypass -File benchmarks\run_driver_comparison.ps1 -TimeoutSeconds 120
+```
+
+Resultado gerado em `benchmarks/reports/driver-comparison/summary.md`.
+
+## Validacao local curta em 2026-06-26
+
+Ambiente: PostgreSQL 16.7 local, `127.0.0.1:5432`, database `dart_test`, usuario `dart`.
+
+Resumo da amostra curta (`BENCH_ITERATIONS=5`, `rows_10`):
+
+- `dpgsql`: `SELECT 1` 0.450 ms/op, parametro 1.045 ms/op, prepared 0.834 ms/op, rows_10 2.534 ms/query.
+- `php_pgsql`: `SELECT 1` 0.202 ms/op, parametro 0.240 ms/op, prepared 0.227 ms/op, rows_10 0.244 ms/query.
+- `php_pdo_pgsql`: `SELECT 1` 0.304 ms/op, parametro 0.130 ms/op, prepared 0.121 ms/op, rows_10 0.377 ms/query.
+
+Esta amostra e pequena e serve apenas como validacao funcional do benchmark; ainda nao prova throughput final.
+
+
+o dpgsql não parece estar no teto de performance ainda. Ele já tem uma base forte — driver Dart puro, sem dependências runtime, com protocolo estendido, pipeline, batch, COPY básico, pooling e buffers — mas o próprio código ainda mostra gargalos reais em alocação, preparação automática, decoding de linhas e benchmark/profiling. O pubspec.yaml define o projeto como “High Performance PostgreSQL Driver for Dart” e sem dependências runtime, o que é uma boa base para otimização fina.
+
+A conclusão mais honesta é: provavelmente você já passou dos ganhos óbvios de arquitetura, mas ainda não chegou no teto. Falta transformar algumas estruturas “implementadas” em estruturas realmente usadas no hot path, medir alocação/memória, e reduzir cópias por mensagem/linha.
+
+Onde ainda há mais ganho
+1. Integrar de verdade o PreparedStatementManager
+
+Esse é provavelmente o maior ganho funcional que ainda aparece no código. O PreparedStatementManager já existe, tem cache por SQL, contadores de hit/miss, auto-prepare candidate, threshold de uso e LRU eviction.
+
+Mas no fluxo principal, o NpgsqlCommand.prepare() ainda gera um nome manual com prep_${hashCode} e chama connection.prepare(...); já o NpgsqlConnector.executeReader() só evita Parse quando recebe statementName, ou seja, quando alguém preparou explicitamente.
+
+A otimização aqui seria colocar um PreparedStatementManager dentro de cada NpgsqlConnector físico. Antes de enviar Parse, o conector calcularia os OIDs dos parâmetros, consultaria o manager por (sql reescrito, parameterOids), e usaria statementName existente quando houver hit. Quando uma query passar do threshold, o conector prepara automaticamente e passa a usar Bind/Execute sem reenviar Parse.
+
+Isso é coerente com o PostgreSQL: prepared statements nomeados vivem na sessão até serem fechados ou até o fim da sessão, enquanto o statement não nomeado é substituído pelo próximo Parse ou Query. O Npgsql também documenta prepared statements e automatic preparation como um dos caminhos mais importantes de performance, inclusive com prepared statements persistindo por conexão física dentro do pool.
+
+Prioridade: altíssima. Isso pode reduzir bytes enviados, CPU de parse no servidor e roundtrips de preparação em workloads repetitivos.
+
+2. Reduzir alocações no writer: hoje ainda há cópias/objetos demais
+
+O PostgresMessageWriter já reutiliza _scratchBuffer, o que é bom. Mas em modo bufferizado ele ainda monta o payload, cria outro MemoryBinaryOutput para a mensagem completa, escreve tipo/length/payload nele e enfileira um Uint8List.
+
+Além disso, o WriteBuffer mantém uma List<Uint8List> de mensagens pendentes e no flush() escreve uma a uma no BinaryOutput. Isso reduz flushes no socket, mas não é um buffer contíguo de protocolo; ainda há lista, objetos por mensagem e cópia para o SocketBinaryOutput.
+
+O ideal é um WriteBuffer estilo Npgsql: um único Uint8List grande por conexão, com:
+
+final start = buffer.position;
+buffer.writeUint8(typeCode);
+buffer.writeInt32(0);        // placeholder length
+writeBody(buffer);
+buffer.patchInt32(start + 1, buffer.position - start - 1);
+
+Assim você elimina o MemoryBinaryOutput intermediário por mensagem e reduz objetos no GC. Para mensagens grandes, dá para ter caminho especial: flush do buffer atual e escrita direta do payload grande.
+
+Também vale trocar ByteData.sublistView por escrita direta via shifts em SocketBinaryOutput e MemoryBinaryOutput. Hoje cada writeInt16, writeInt32, writeUint32, writeInt64 cria uma view ByteData temporária.
+
+Prioridade: alta. Isso melhora muito microbenchmarks, batch/pipeline e qualquer carga com muitas queries pequenas.
+
+3. Usar o TypeHandlerRegistry do conector, não criar um por reader
+
+O NpgsqlConnector já tem um TypeHandlerRegistry próprio. Mas cada NpgsqlDataReaderImpl cria outro registry novo.
+
+Isso é desperdício direto: cada reader registra todos os handlers novamente, inclusive handlers de JSON, geométricos, range, arrays etc. O TypeHandlerRegistry registra vários handlers no construtor.
+
+Troque para:
+
+class NpgsqlDataReaderImpl implements NpgsqlDataReader {
+  NpgsqlDataReaderImpl(this._connector)
+      : _typeRegistry = _connector.typeRegistry;
+
+  final NpgsqlConnector _connector;
+  final TypeHandlerRegistry _typeRegistry;
+}
+
+Prioridade: alta e fácil. É um ganho de alocação sem mudar protocolo.
+
+4. Implementar PgRow/lazy decode de verdade
+
+Hoje o parser cria um DataRowMessage por linha, com uma lista de Uint8List? por coluna. Depois, cada reader[index] resolve o handler e decodifica o valor naquele momento, mas se acessar a mesma coluna duas vezes, decodifica duas vezes.
+
+O roadmap do próprio projeto já aponta isso: PgRow como view sobre buffer, acesso por índice/nome, lazy decode e menos alocações de string ainda estão pendentes.
+
+O próximo passo seria transformar a linha em algo como:
+
+final class PgRow {
+  final Uint8List payload;
+  final Int32List offsets;
+  final Int32List lengths;
+  final List<Object?>? decodedCache;
+
+  Object? getValue(int index) {
+    // decodifica só quando acessado
+    // opcionalmente cacheia
+  }
+}
+
+Para leitura sequencial de milhões de linhas, isso é muito mais importante que micro-otimizar SELECT 1. O Npgsql também chama atenção para modo sequencial e buffers quando rows grandes passam do buffer interno.
+
+Prioridade: alta para SELECTs grandes. Para queries que retornam poucas linhas, o impacto é menor.
+
+5. Evitar SqlRewriter no caminho quente
+
+O SqlRewriter.rewrite() sempre varre a SQL e aloca StringBuffer, lista de parâmetros e mapa quando há parâmetros. Além disso, para cada @param, ele faz parameters.firstWhere(...), o que vira busca linear por placeholder.
+
+O Npgsql documenta que placeholders posicionais nativos $1, $2 são preferíveis porque o PostgreSQL os entende diretamente; placeholders nomeados exigem parse/rewrite da SQL e têm custo de performance.
+
+Otimizações práticas:
+
+Se a SQL não contém @ nem ?, não rode o rewriter.
+Se a SQL já usa $1, $2, pule rewrite.
+Cacheie o plano de rewrite por SQL: SQL original → SQL reescrita + ordem dos nomes.
+Crie Map<String, NpgsqlParameter> uma vez por command, não firstWhere por placeholder.
+Corrija o parser para comments, dollar-quoted strings e casos PostgreSQL específicos, porque isso também evita rewrites errados.
+
+Prioridade: alta para queries parametrizadas repetitivas.
+
+6. Otimizar TypeHandlers: remover ByteData temporário e cópias em arrays
+
+Vários handlers usam ByteData.sublistView no read e criam ByteData novo no write. Exemplos: IntegerHandler, FloatHandler, DoubleHandler, TimestampHandler, DateHandler.
+
+No ArrayHandler, a leitura binária usa buffer.sublist(...), que copia bytes; isso deveria ser Uint8List.sublistView(...). A escrita de array também monta List<int> out, usa vários ByteData pequenos e só no fim cria Uint8List.fromList(out).
+
+Troque isso por escrita direta em MemoryBinaryOutput ou, melhor ainda, no próprio buffer de Bind.
+
+Prioridade: média/alta. Vai aparecer principalmente em arrays, bulk paramétrico e muitos valores numéricos.
+
+7. Pipeline e batch já estão bons, mas ainda há riscos de backpressure
+
+O projeto já avançou bastante em pipeline: fila de comandos pendentes, API pública, reader pipeline-aware, erro em pipeline, flush aggregation e testes reais aparecem no TODO/progresso.
+
+O ponto agora não é “implementar pipeline”, e sim garantir que pipeline grande não vire acúmulo infinito de memória. A documentação do libpq alerta que pipeline melhora throughput, mas exige controle de fila, processamento FIFO dos resultados e cuidado para não cair em deadlock quando cliente e servidor produzem dados demais sem ler/escrever de forma intercalada.
+
+Então eu adicionaria limites configuráveis:
+
+maxPipelineCommands
+maxPipelineBufferedBytes
+maxInFlightBytes
+
+E faria o pipeline intercalar flush/leitura quando passar do limite.
+
+Prioridade: média. Para batch pequeno, já deve estar bom. Para pipeline massivo, isso vira essencial.
+
+8. COPY streaming e cursors ainda podem dar ganhos grandes
+
+O TODO mostra que COPY IN/OUT básico já existe, mas APIs stream-based, CSV/TEXT e progress callbacks ainda estão pendentes. Também estão pendentes cursors/fetch incremental com Stream<PgRow> e backpressure.
+
+Para bulk insert/export, COPY é onde você mais se aproxima do teto real do PostgreSQL. Para SELECT enorme, cursor/fetch incremental evita carregar tudo em memória e conversa melhor com backpressure do Dart.
+
+Prioridade: alta para ETL/import/export; média para APIs comuns.
+
+O benchmark atual não prova teto
+
+Seu benchmark atual compara dpgsql com o pacote postgres, mas o benchmark simples roda basicamente SELECT 1 em loop com executeReader() e drena o reader. O benchmark maior tem tipos de query como simple, select, where, join e aggregate, mas ainda não mede explicitamente auto-prepare, prepared cache, pipeline com tamanhos diferentes, COPY streaming, memória/GC ou latência artificial.
+
+Isso é importante porque SELECT 1 local mede mais roundtrip + overhead fixo do driver do que throughput real. O próprio PostgreSQL/libpq documenta que pipeline é especialmente útil quando há muitas operações pequenas ou alta latência; quando a query demora muito no servidor, o ganho relativo do pipeline cai.
+
+Eu criaria esta matriz mínima de benchmark:
+
+Cenário	O que mede
+SELECT 1 simple protocol	overhead mínimo/roundtrip
+SELECT $1 extended sem prepare	custo Parse/Bind/Describe/Execute
+SELECT $1 explicit prepare	ganho de prepared
+auto-prepare após N usos	integração do manager
+batch 10/100/1000 inserts	pipeline + writer buffer
+pipeline 10/100/1000 selects	backpressure e ordering
+SELECT 100k rows	parser/DataRow/PgRow/GC
+SELECT rows largas com text/bytea	buffer e cópias
+COPY IN 100k/1M rows	bulk throughput
+COPY OUT 100k/1M rows	streaming/export
+latência 1ms/10ms/50ms/100ms	benefício real de pipeline
+Minha ordem recomendada
+Benchmark e profiling primeiro: adicione medição de p50/p95/p99, ops/s, bytes alocados/op e GC. O próprio TODO ainda marca métricas, benchmarks comparativos, stress/load e profiling de memória como pendentes.
+Quick wins de alocação: usar registry do conector no reader, sublistView em arrays, remover ByteData.sublistView em primitives, cachear _charCode/CStrings vazios.
+Prepared cache real por conexão: esse é o item com maior chance de ganho em app real.
+Writer contíguo com patch de length: reduz GC/syscalls/cópias em pipeline e batch.
+PgRow/lazy decode: melhora muito SELECT grande.
+COPY streaming e cursor streaming: melhora bulk e datasets grandes.
+Multiplexing só depois: o TODO ainda lista multiplexing como baixa prioridade/avançado, e eu concordo.
+Veredito
+
+Não está no teto. Eu diria que o driver já tem uma arquitetura promissora, mas ainda há ganhos claros antes de falar em limite: prepared cache integrado, menos alocação no writer/parser, PgRow lazy, SQL rewrite cacheado, COPY/cursor streaming e benchmarks melhores. O “teto” só começa a ficar perto quando, em benchmarks com prepared + pipeline + COPY + baixa alocação, o tempo passar a ser dominado pelo PostgreSQL/rede e não pelo Dart/driver.
+
+
 o foco é criar um driver postgresql de alto desempenho inspirado (portar) o npgsql para dart
 C:\MyDartProjects\npgsql\referencias\npgsql-main
+
+C:\MyDartProjects\dpgsql\referencias\npgsql
+
 foque em ser mais proximo possivel da versão original npgsql ou seja mesmos nomes de classes, arquivos e metodos para facilitar diff
 reponda sempre em portugues
 continue portando o C:\MyDartProjects\npgsql\referencias\npgsql-main para dart e atualizando o C:\MyDartProjects\npgsql\TODO.md
@@ -324,7 +654,13 @@ Optimize buffer usage.
 - [x] Limpar prepared statements/portals órfãos (DISCARD ALL)
 - [x] Health check de conexões antes de retornar do pool
 - [x] Métricas de pool (conexões ativas, idle, tempo de espera)
-- [ ] Connection warmup (pre-create connections)
+- [x] Maximum Pool Size com fila de espera
+- [x] Timeout de checkout quando pool está esgotado
+- [x] Connection warmup (pre-create connections)
+- [x] Idle/lifetime pruning no checkout/return
+- [x] Pruning periódico em background
+- [x] Detecção de reader/transaction aberta antes de devolver ao pool
+- [ ] Detecção de COPY import/export aberto antes de devolver ao pool
 
 ### 📊 Média Prioridade (Funcionalidades Importantes)
 
@@ -402,3 +738,208 @@ DataTable
 
 **Status Atual**: ~70% do core implementado, pronto para uso básico/intermediário.
 **Próximo Marco**: Pipeline Mode + Batch otimizado = 90% performance do Npgsql C#.
+
+hecklist curto e direto do que precisa pra ficar realmente rápido.
+
+Vou separar em “coisas que dão ganho grande” e “micro-otimizações”.
+
+1. Funcionalidades que dão ganho grande (prioridade alta)
+1.1. Protocolo estendido bem feito (base de tudo)
+
+Implementar de verdade o extended query protocol:
+
+Parse / Bind / Describe / Execute / Sync.
+
+Reuso de prepared statements:
+
+Cache por conexão de statementName → SQL / tipos.
+
+Evitar mandar Parse toda vez se o SQL é igual.
+
+Reuso de portals quando fizer sentido (pelo menos entender bem o ciclo de vida).
+
+Suporte a formato binário para tipos comuns (int, float, timestamp, uuid) para reduzir texto/parsing.
+
+Sem isso, pipeline/batch já nascem capados.
+
+1.2. Pipeline mode (estilo libpq)
+
+Sim, isso é core pra alta performance:
+
+Permitir mandar várias sequências Parse/Bind/Execute seguidas sem esperar resposta entre elas.
+
+Tratar o Sync como barreira (ponto onde você sabe que todas as respostas anteriores chegaram).
+
+Manter uma fila de “comandos pendentes”:
+
+Cada item da fila sabe quantas mensagens de resposta esperar.
+
+Conforme você lê as mensagens, vai marcando o comando como completo.
+
+Tratar erros de forma correta:
+
+Quando der erro em uma mensagem, o servidor manda ErrorResponse + ReadyForQuery.
+
+Tudo depois do erro até o próximo Sync é “descartado” internamente, você tem que sincronizar o estado do client.
+
+Com isso você ganha:
+
+Menos round-trips em cenários de muitas queries pequenas;
+
+Latência escondida (overlap de execução no servidor + leitura de rede).
+
+1.3. Batching (estilo Npgsql)
+
+Em cima do pipeline, você expõe uma API tipo:
+
+PgBatch / PgCommandBatch / algo assim:
+
+batch.add("INSERT ...", params),
+
+batch.add("UPDATE ...", params),
+
+await batch.execute();
+
+Internamente:
+
+Você simplesmente monta um pipeline com todos esses comandos.
+
+Mapeia as respostas de volta para cada “entry” do batch.
+
+Ganhos:
+
+O usuário não precisa pensar em pipeline explícito.
+
+Ele só fala “quero mandar esses N comandos juntos”.
+
+1.4. Pool de conexões + reuso
+
+Alta performance em app real = pool:
+
+Manter conexões reutilizáveis;
+
+Reset leve de estado no checkout (rollback se tiver transação aberta, limpar parâmetros/portais);
+
+Evitar custo de handshake/TLS/auth toda hora.
+
+Em cima disso:
+
+Cache de prepared statements por conexão (não global!).
+
+Se quiser ser mais agressivo, pode ter um cache lógico global que “ensina” conexões novas a preparar statements comuns, mas isso já é luxo.
+
+1.5. COPY para bulk
+
+Pra INSERT de grandes volumes:
+
+Implementar COPY IN / OUT:
+
+COPY ... FROM STDIN,
+
+COPY ... TO STDOUT.
+
+Oferecer uma API de stream:
+
+Stream<List<int>> ou Stream<Row> → COPY IN,
+
+COPY OUT → Stream<Row> ou de chunks binários.
+
+Isso dá um ganho brutal em:
+
+importação de dados,
+
+ETL,
+
+migrações pesadas.
+
+2. Coisas de arquitetura/perf de rede (importantes também)
+2.1. I/O eficiente (BinaryInput/BinaryOutput)
+
+Um buffer de leitura por conexão (tipo o SocketBinaryInput que falamos, ajustado pra não copiar tudo a cada _consume).
+
+Um buffer de escrita:
+
+Acumula várias mensagens em Uint8List interno,
+
+Dá um socket.add() só com chunk grande,
+
+flush() controlado (bem útil em pipeline).
+
+Objetivo:
+
+Poucas cópias de memória,
+
+Poucos add() no socket,
+
+Sem await a cada pequena mensagem.
+
+2.2. Representação de linha/resultado leve
+
+Evitar:
+
+Criar Map<String, dynamic> por linha com milhões de alocações.
+
+Melhor:
+
+Uma classe PgRow que é view em cima de um buffer:
+
+Indexado por posição (row[0], row[1]),
+
+Optionally por nome (row['col']) com um map de nomes → índice,
+
+Decodificação “sob demanda” quando o campo é acessado.
+
+3. Coisas avançadas / nice-to-have (para ir além)
+3.1. Multiplexing (estilo Npgsql multiplexing)
+
+Super avançado, mas poderoso:
+
+Várias “sessões lógicas” dentro de uma conexão física.
+
+O driver interleia comandos de vários usuários/conexões lógicas no mesmo socket.
+
+Você precisa de:
+
+Uma fila mais sofisticada de comandos,
+
+Gestão de backpressure e fairness.
+
+Isso aumenta muito o throughput em cenários de muitas queries pequenas, mas é um passo bem além de pipeline/batch.
+
+3.2. Cursors / fetch incremental
+
+Para queries que retornam muitos dados:
+
+Suporte a cursors/portals com FETCH:
+
+Em vez de puxar tudo de uma vez, você faz FETCH n em loop.
+
+API de Stream<PgRow>:
+
+Controla quantos dados mantêm em memória,
+
+Integra com backpressure do Dart.
+
+4. Micro-otimizações que ajudam mas não são “game changers”
+
+Usar formato binário sempre que possível para tipos numéricos / timestamp.
+
+Minimizar String allocations (principalmente para colunas numéricas).
+
+Reusar buffers (Uint8List/ByteData) em vez de criar novos o tempo todo.
+
+Evitar dynamic em hot paths (tipos bem definidos, genéricos se precisar).
+
+Ter caminhos rápidos para casos muito comuns:
+
+SELECT 1,
+
+SELECT col1,col2 FROM tabela WHERE pk = $1.
+
+Resumão em uma frase
+
+Para alta performance real no seu driver PostgreSQL em Dart, além de implementar Pipeline mode (estilo libpq) e Batching (estilo Npgsql), você precisa:
+
+Extended protocol bem feito + cache de prepared + pool de conexões + I/O bufferizado eficiente + (opcionalmente) COPY, cursors, e quem sabe multiplexing no futuro.
+
+Se quiser, no próximo passo posso montar um mini “roadmap” em checklist (MVP → alta performance → features avançadas) só pro driver que você está fazendo.

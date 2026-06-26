@@ -1,14 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import '../npgsql_batch_command.dart';
 import '../npgsql_data_reader.dart';
 import '../postgres_batch_exception.dart';
 import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
+import '../types/npgsql_types.dart';
+import '../types/oid.dart';
 import '../types/type_handler.dart';
 import 'npgsql_connector.dart';
 import 'pending_command.dart';
+import 'timezone_helper.dart';
 
 class NpgsqlDataReaderImpl implements NpgsqlDataReader {
   NpgsqlDataReaderImpl(this._connector,
@@ -20,13 +24,13 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
         _batchCommands = batchCommands;
 
   final NpgsqlConnector _connector;
-  final TypeHandlerRegistry _typeRegistry = TypeHandlerRegistry();
   final List<PendingCommand>? _pendingCommands;
   final List<NpgsqlBatchCommand>? _batchCommands;
   final bool _drainReadyOnClose;
 
   RowDescriptionMessage? _rowDescription;
   DataRowMessage? _currentRow;
+  List<Object?>? _currentRowValues;
   int _recordsAffected = 0;
   bool _closed = false; // Public API closed state (user cannot read more)
   bool _drained = false; // Protocol state (ReadyForQuery received)
@@ -35,6 +39,13 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
   PendingCommand? _currentPendingCommand;
 
   Map<String, int>? _columnMap;
+  List<TypeHandler?>? _fieldHandlers;
+  List<bool>? _fieldIsText;
+  List<int>? _fieldOids;
+
+  static final Object _notDecoded = Object();
+  static final DateTime _timestampEpoch =
+      TimezoneHelper.fixTimezoneTransition(DateTime(2000));
 
   Future<void> init() async {
     if (_isPipelineReader) {
@@ -58,7 +69,9 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
         return;
       }
 
-      if (msg is ParseCompleteMessage || msg is BindCompleteMessage) {
+      if (msg is ParseCompleteMessage ||
+          msg is BindCompleteMessage ||
+          msg is CloseCompletedMessage) {
         // Extended query flow
         continue;
       }
@@ -69,11 +82,11 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
       }
 
       if (msg is RowDescriptionMessage) {
-        _rowDescription = msg;
+        _setRowDescription(msg);
         break;
       }
       if (msg is NoDataMessage) {
-        _rowDescription = null;
+        _clearRowDescription();
         continue;
       }
       if (msg is DataRowMessage) {
@@ -182,6 +195,36 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
     _currentPendingCommand = pendingList[_pendingCommandIndex];
   }
 
+  void _setRowDescription(RowDescriptionMessage msg) {
+    _rowDescription = msg;
+    _columnMap = null;
+
+    final fields = msg.fields;
+    final handlers = List<TypeHandler?>.filled(fields.length, null);
+    final textFormats = List<bool>.filled(fields.length, false);
+    final oids = List<int>.filled(fields.length, 0);
+    final registry = _connector.typeRegistry;
+
+    for (var i = 0; i < fields.length; i++) {
+      final field = fields[i];
+      oids[i] = field.oid;
+      handlers[i] = registry.resolve(field.oid);
+      textFormats[i] = field.format.code == 0;
+    }
+
+    _fieldHandlers = handlers;
+    _fieldIsText = textFormats;
+    _fieldOids = oids;
+  }
+
+  void _clearRowDescription() {
+    _rowDescription = null;
+    _columnMap = null;
+    _fieldHandlers = null;
+    _fieldIsText = null;
+    _fieldOids = null;
+  }
+
   Future<IBackendMessage?> _getNextMessage() async {
     if (_currentPendingCommand != null) {
       return _connector.readMessageForPending(_currentPendingCommand!);
@@ -265,32 +308,205 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
 
   @override
   dynamic operator [](index) {
-    if (index is String) return this[getOrdinal(index)];
+    if (index is String) return _getValue(getOrdinal(index));
     if (index is! int) throw ArgumentError('Index must be int or String');
+    return _getValue(index);
+  }
 
+  dynamic _getValue(int index) {
     if (_currentRow == null) {
       throw StateError('No current row. Call read() first.');
     }
 
-    final colData = _currentRow!.columns[index];
-    if (colData == null) return null; // DBNull
+    final cache = _currentRowValues ??=
+        List<Object?>.filled(_currentRow!.columnCount, _notDecoded);
+    final cached = cache[index];
+    if (!identical(cached, _notDecoded)) {
+      return cached;
+    }
 
-    final fieldDesc = _rowDescription!.fields[index];
-    final oid = fieldDesc.oid;
-    final isText = fieldDesc.format.code == 0;
+    final row = _currentRow!;
+    final length = row.columnLengths[index];
+    if (length == -1) {
+      cache[index] = null;
+      return null; // DBNull
+    }
+    final offset = row.columnOffsets[index];
+    final payload = row.payload;
 
-    final handler = _typeRegistry.resolve(oid);
+    final isText = _fieldIsText?[index] ?? true;
+    final oid = _fieldOids?[index] ?? 0;
+
+    final fastValue = _tryReadFast(payload, offset, length, oid, isText);
+    if (!identical(fastValue, _notDecoded)) {
+      cache[index] = fastValue;
+      return fastValue;
+    }
+
+    final handler = _fieldHandlers?[index];
+    final colData = row.getColumn(index)!;
     if (handler != null) {
-      return handler.read(colData, isText: isText);
+      final value = handler.read(colData, isText: isText);
+      cache[index] = value;
+      return value;
     }
 
     // Fallback
-    if (isText) return utf8.decode(colData);
-    return colData;
+    final value = isText ? utf8.decode(colData) : colData;
+    cache[index] = value;
+    return value;
+  }
+
+  Object? _tryReadFast(
+    Uint8List payload,
+    int offset,
+    int length,
+    int oid,
+    bool isText,
+  ) {
+    if (isText) {
+      switch (oid) {
+        case Oid.text:
+        case Oid.varchar:
+        case Oid.bpchar:
+        case Oid.unknown:
+          return _decodeText(payload, offset, length);
+        case Oid.int2:
+        case Oid.int4:
+        case Oid.int8:
+          return int.parse(_decodeText(payload, offset, length));
+        case Oid.bool:
+          if (length == 1) {
+            final b = payload[offset];
+            return b == 116 || b == 49; // 't' or '1'
+          }
+          final value = _decodeText(payload, offset, length);
+          return value == 'true' || value == '1';
+        case Oid.float4:
+        case Oid.float8:
+          return double.parse(_decodeText(payload, offset, length));
+      }
+      return _notDecoded;
+    }
+
+    switch (oid) {
+      case Oid.int2:
+        if (length == 2) return _readInt16(payload, offset);
+        return _notDecoded;
+      case Oid.int4:
+        if (length == 4) return _readInt32(payload, offset);
+        return _notDecoded;
+      case Oid.int8:
+        if (length == 8) return _readInt64(payload, offset);
+        return _notDecoded;
+      case Oid.bool:
+        return length > 0 && payload[offset] != 0;
+      case Oid.text:
+      case Oid.varchar:
+      case Oid.bpchar:
+      case Oid.unknown:
+        return _decodeText(payload, offset, length);
+      case Oid.float4:
+        if (length == 4) {
+          return ByteData.view(
+                  payload.buffer, payload.offsetInBytes + offset, 4)
+              .getFloat32(0);
+        }
+        return _notDecoded;
+      case Oid.float8:
+        if (length == 8) {
+          return ByteData.view(
+                  payload.buffer, payload.offsetInBytes + offset, 8)
+              .getFloat64(0);
+        }
+        return _notDecoded;
+      case Oid.timestamp:
+      case Oid.timestamptz:
+        if (length == 8) {
+          return _timestampEpoch.add(Duration(
+            microseconds: _readInt64(payload, offset),
+          ));
+        }
+        return _notDecoded;
+      case Oid.numeric:
+        if (length >= 8) {
+          return _readNumeric(payload, offset, length);
+        }
+        return _notDecoded;
+    }
+
+    return _notDecoded;
+  }
+
+  String _decodeText(Uint8List payload, int offset, int length) {
+    if (identical(_connector.encoding, utf8)) {
+      return utf8.decoder.convert(payload, offset, offset + length);
+    }
+    return _connector.encoding
+        .decode(Uint8List.sublistView(payload, offset, offset + length));
+  }
+
+  int _readInt16(Uint8List payload, int offset) {
+    final value = (payload[offset] << 8) | payload[offset + 1];
+    return value.toSigned(16);
+  }
+
+  int _readInt32(Uint8List payload, int offset) {
+    final value = (payload[offset] << 24) |
+        (payload[offset + 1] << 16) |
+        (payload[offset + 2] << 8) |
+        payload[offset + 3];
+    return value.toSigned(32);
+  }
+
+  int _readUint32(Uint8List payload, int offset) {
+    return (payload[offset] << 24) |
+        (payload[offset + 1] << 16) |
+        (payload[offset + 2] << 8) |
+        payload[offset + 3];
+  }
+
+  int _readInt64(Uint8List payload, int offset) {
+    final high = _readInt32(payload, offset);
+    final low = _readUint32(payload, offset + 4);
+    return (high << 32) | low;
+  }
+
+  NpgsqlDecimal _readNumeric(Uint8List payload, int offset, int length) {
+    final end = offset + length;
+    if (offset + 8 > end) {
+      throw FormatException('Invalid numeric length: $length');
+    }
+
+    final ndigits = _readInt16(payload, offset);
+    offset += 2;
+    final weight = _readInt16(payload, offset);
+    offset += 2;
+    final sign = _readInt16(payload, offset);
+    offset += 2;
+    final dscale = _readInt16(payload, offset);
+    offset += 2;
+
+    final digits = List<int>.filled(ndigits, 0);
+    for (var i = 0; i < ndigits; i++) {
+      if (offset + 2 > end) {
+        throw FormatException('Invalid numeric digit length: $length');
+      }
+      digits[i] = _readInt16(payload, offset);
+      offset += 2;
+    }
+
+    return NpgsqlDecimal(
+      ndigits: ndigits,
+      weight: weight,
+      sign: sign,
+      dscale: dscale,
+      digits: digits,
+    );
   }
 
   @override
-  dynamic getValue(int ordinal) => this[ordinal];
+  dynamic getValue(int ordinal) => _getValue(ordinal);
 
   @override
   Future<bool> nextResult() async {
@@ -302,9 +518,9 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
     }
 
     _currentResultFinished = false;
-    _rowDescription = null;
+    _clearRowDescription();
     _currentRow = null;
-    _columnMap = null;
+    _currentRowValues = null;
     _recordsAffected = 0;
     _closed = false;
 
@@ -346,7 +562,7 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
       }
 
       if (msg is RowDescriptionMessage) {
-        _rowDescription = msg;
+        _setRowDescription(msg);
         return true;
       }
 
@@ -381,6 +597,7 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
 
       if (msg == null) {
         _currentRow = null;
+        _currentRowValues = null;
         _currentResultFinished = true;
         _closed = true;
         return false;
@@ -388,6 +605,7 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
 
       if (msg is DataRowMessage) {
         _currentRow = msg;
+        _currentRowValues = null;
         return true;
       }
 
@@ -395,8 +613,7 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
         // Should not happen inside a result set usually, unless interleaved?
         // Treat as start of new result? No, read() is for current result.
         // This might be a bug in state tracking if we get here.
-        _rowDescription = msg;
-        _columnMap = null;
+        _setRowDescription(msg);
         continue;
       }
 
@@ -408,11 +625,14 @@ class NpgsqlDataReaderImpl implements NpgsqlDataReader {
       if (msg is CommandCompleteMessage) {
         _handleCommandComplete(msg);
         _currentRow = null;
+        _currentRowValues = null;
         _currentResultFinished = true;
         return false;
       }
 
       if (msg is ReadyForQueryMessage) {
+        _currentRow = null;
+        _currentRowValues = null;
         _closed = true;
         _drained = true;
         _currentResultFinished = true;

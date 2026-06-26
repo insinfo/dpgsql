@@ -172,6 +172,28 @@ void main() {
       expect(_readCString(input2), 'p1');
     });
 
+    test('Close statement e portal', () async {
+      final out1 = MemoryBinaryOutput();
+      final writer1 = PostgresMessageWriter(out1);
+      final frontend1 = FrontendMessages(writer1);
+      await frontend1.writeCloseStatement('s1');
+      final msg1 = await _readSingleFromOutput(out1);
+      final input1 = MemoryBinaryInput(msg1.payload);
+      expect(msg1.typeCode, 'C'.codeUnitAt(0));
+      expect(input1.readUint8(), 'S'.codeUnitAt(0));
+      expect(_readCString(input1), 's1');
+
+      final out2 = MemoryBinaryOutput();
+      final writer2 = PostgresMessageWriter(out2);
+      final frontend2 = FrontendMessages(writer2);
+      await frontend2.writeClosePortal('p1');
+      final msg2 = await _readSingleFromOutput(out2);
+      final input2 = MemoryBinaryInput(msg2.payload);
+      expect(msg2.typeCode, 'C'.codeUnitAt(0));
+      expect(input2.readUint8(), 'P'.codeUnitAt(0));
+      expect(_readCString(input2), 'p1');
+    });
+
     test('Execute, Sync, Terminate', () async {
       final execOut = MemoryBinaryOutput();
       final execWriter = PostgresMessageWriter(execOut);

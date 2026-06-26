@@ -265,17 +265,19 @@ class BackendMessageReader {
 
   DataRowMessage _parseDataRow(MemoryBinaryInput input) {
     final columnCount = input.readInt16();
-    final columns = <Uint8List?>[];
+    final offsets = Int32List(columnCount);
+    final lengths = Int32List(columnCount);
     for (var i = 0; i < columnCount; i++) {
       final len = input.readInt32();
+      lengths[i] = len;
       if (len == -1) {
-        columns.add(null);
+        offsets[i] = -1;
       } else {
-        final bytes = input.readBytes(len);
-        columns.add(bytes is Uint8List ? bytes : Uint8List.fromList(bytes));
+        offsets[i] = input.offset;
+        input.skipBytes(len);
       }
     }
-    return DataRowMessage(columns);
+    return DataRowMessage.fromPayload(input.buffer, offsets, lengths);
   }
 
   ParameterDescriptionMessage _parseParameterDescription(
@@ -515,12 +517,96 @@ final class FieldDescription {
 }
 
 final class DataRowMessage implements IBackendMessage {
-  DataRowMessage(this.columns);
+  DataRowMessage(List<Uint8List?> columns)
+      : this.fromPayload(
+          _buildPayload(columns),
+          _buildOffsets(columns),
+          _buildLengths(columns),
+        );
+
+  DataRowMessage.fromPayload(
+    this.payload,
+    this.columnOffsets,
+    this.columnLengths,
+  );
 
   @override
   BackendMessageCode get code => BackendMessageCode.dataRow;
 
-  final List<Uint8List?> columns;
+  final Uint8List payload;
+  final Int32List columnOffsets;
+  final Int32List columnLengths;
+  List<Uint8List?>? _columns;
+
+  int get columnCount => columnLengths.length;
+
+  Uint8List? getColumn(int index) {
+    RangeError.checkValidIndex(index, this, 'index', columnCount);
+    final length = columnLengths[index];
+    if (length == -1) {
+      return null;
+    }
+    final offset = columnOffsets[index];
+    return Uint8List.sublistView(payload, offset, offset + length);
+  }
+
+  List<Uint8List?> get columns {
+    return _columns ??= List<Uint8List?>.generate(
+      columnCount,
+      getColumn,
+      growable: false,
+    );
+  }
+
+  static Uint8List _buildPayload(List<Uint8List?> columns) {
+    var length = 2;
+    for (final column in columns) {
+      length += 4 + (column?.length ?? 0);
+    }
+
+    final payload = Uint8List(length);
+    final view = ByteData.sublistView(payload);
+    var offset = 0;
+    view.setInt16(offset, columns.length);
+    offset += 2;
+
+    for (final column in columns) {
+      if (column == null) {
+        view.setInt32(offset, -1);
+        offset += 4;
+      } else {
+        view.setInt32(offset, column.length);
+        offset += 4;
+        payload.setRange(offset, offset + column.length, column);
+        offset += column.length;
+      }
+    }
+    return payload;
+  }
+
+  static Int32List _buildOffsets(List<Uint8List?> columns) {
+    final offsets = Int32List(columns.length);
+    var offset = 2;
+    for (var i = 0; i < columns.length; i++) {
+      final column = columns[i];
+      offset += 4;
+      if (column == null) {
+        offsets[i] = -1;
+      } else {
+        offsets[i] = offset;
+        offset += column.length;
+      }
+    }
+    return offsets;
+  }
+
+  static Int32List _buildLengths(List<Uint8List?> columns) {
+    final lengths = Int32List(columns.length);
+    for (var i = 0; i < columns.length; i++) {
+      lengths[i] = columns[i]?.length ?? -1;
+    }
+    return lengths;
+  }
 }
 
 final class ParameterDescriptionMessage implements IBackendMessage {

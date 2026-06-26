@@ -13,8 +13,7 @@ class NpgsqlConnectionStringBuilder {
     }
   }
 
-  String get clientEncoding =>
-      _parameters['Client Encoding'] ?? _parameters['Encoding'] ?? 'UTF8';
+  String get clientEncoding => _get('Client Encoding', 'Encoding') ?? 'UTF8';
   set clientEncoding(String value) => _parameters['Client Encoding'] = value;
 
   Encoding get encoding {
@@ -40,27 +39,26 @@ class NpgsqlConnectionStringBuilder {
     }
   }
 
-  String get host => _parameters['Host'] ?? 'localhost';
+  String get host => _get('Host') ?? 'localhost';
   set host(String value) => _parameters['Host'] = value;
 
-  int get port => int.tryParse(_parameters['Port'] ?? '5432') ?? 5432;
+  int get port => int.tryParse(_get('Port') ?? '5432') ?? 5432;
   set port(int value) => _parameters['Port'] = value.toString();
 
-  String get username =>
-      _parameters['Username'] ?? _parameters['User ID'] ?? 'postgres';
+  String get username => _get('Username', 'User ID', 'UserID') ?? 'postgres';
   set username(String value) {
     _parameters['Username'] = value;
     _parameters.remove('User ID');
   }
 
-  String get password => _parameters['Password'] ?? '';
+  String get password => _get('Password') ?? '';
   set password(String value) => _parameters['Password'] = value;
 
-  String get database => _parameters['Database'] ?? 'postgres';
+  String get database => _get('Database', 'Initial Catalog') ?? 'postgres';
   set database(String value) => _parameters['Database'] = value;
 
   SslMode get sslMode {
-    final val = _parameters['SSL Mode'] ?? _parameters['SslMode'];
+    final val = _get('SSL Mode', 'SslMode');
     if (val == null) return SslMode.disable;
     switch (val.toLowerCase()) {
       case 'disable':
@@ -106,16 +104,78 @@ class NpgsqlConnectionStringBuilder {
   }
 
   bool get trustServerCertificate {
-    final val = _parameters['Trust Server Certificate'] ??
-        _parameters['TrustServerCertificate'];
-    return val?.toLowerCase() == 'true';
+    return _getBool(
+      true,
+      'Trust Server Certificate',
+      'TrustServerCertificate',
+    );
   }
 
   set trustServerCertificate(bool value) {
     _parameters['Trust Server Certificate'] = value.toString();
   }
 
-  String? operator [](String keyword) => _parameters[keyword];
+  /// Whether pooling is enabled. Mirrors Npgsql's `Pooling` keyword.
+  bool get pooling => _getBool(true, 'Pooling');
+  set pooling(bool value) => _parameters['Pooling'] = value.toString();
+
+  /// Minimum number of connections to pre-create when [NpgsqlDataSource.warmup]
+  /// is called.
+  int get minPoolSize => _getInt(0, 'Minimum Pool Size', 'Min Pool Size');
+  set minPoolSize(int value) =>
+      _parameters['Minimum Pool Size'] = value.toString();
+
+  /// Maximum number of physical connections allowed in the pool.
+  int get maxPoolSize => _getInt(100, 'Maximum Pool Size', 'Max Pool Size');
+  set maxPoolSize(int value) =>
+      _parameters['Maximum Pool Size'] = value.toString();
+
+  /// Time to wait for a free connection when the pool is exhausted.
+  Duration get timeout => Duration(
+        seconds: _getInt(15, 'Timeout', 'Connection Timeout'),
+      );
+  set timeout(Duration value) =>
+      _parameters['Timeout'] = value.inSeconds.toString();
+
+  /// How long an idle connector may stay in the pool before being pruned.
+  Duration get connectionIdleLifetime => Duration(
+        seconds:
+            _getInt(300, 'Connection Idle Lifetime', 'ConnectionIdleLifetime'),
+      );
+  set connectionIdleLifetime(Duration value) =>
+      _parameters['Connection Idle Lifetime'] = value.inSeconds.toString();
+
+  /// Maximum physical connector lifetime. Zero disables lifetime pruning.
+  Duration get connectionLifetime => Duration(
+        seconds: _getInt(3600, 'Connection Lifetime', 'ConnectionLifeTime'),
+      );
+  set connectionLifetime(Duration value) =>
+      _parameters['Connection Lifetime'] = value.inSeconds.toString();
+
+  /// How often the pool prunes idle/lifetime-expired physical connections.
+  Duration get connectionPruningInterval => Duration(
+        seconds: _getInt(
+          10,
+          'Connection Pruning Interval',
+          'ConnectionPruningInterval',
+        ),
+      );
+  set connectionPruningInterval(Duration value) =>
+      _parameters['Connection Pruning Interval'] = value.inSeconds.toString();
+
+  /// Maximum number of automatically prepared statements. Zero disables
+  /// automatic preparation, matching Npgsql's default.
+  int get maxAutoPrepare => _getInt(0, 'Max Auto Prepare', 'MaxAutoPrepare');
+  set maxAutoPrepare(int value) =>
+      _parameters['Max Auto Prepare'] = value.toString();
+
+  /// Number of executions before a statement is automatically prepared.
+  int get autoPrepareMinUsages =>
+      _getInt(5, 'Auto Prepare Min Usages', 'AutoPrepareMinUsages');
+  set autoPrepareMinUsages(int value) =>
+      _parameters['Auto Prepare Min Usages'] = value.toString();
+
+  String? operator [](String keyword) => _get(keyword);
   void operator []=(String keyword, String? value) {
     if (value == null) {
       _parameters.remove(keyword);
@@ -127,10 +187,10 @@ class NpgsqlConnectionStringBuilder {
   void _parse(String connectionString) {
     final parts = connectionString.split(';');
     for (final part in parts) {
-      final kv = part.split('=');
-      if (kv.length == 2) {
-        final key = kv[0].trim();
-        final value = kv[1].trim();
+      final index = part.indexOf('=');
+      if (index > 0) {
+        final key = part.substring(0, index).trim();
+        final value = part.substring(index + 1).trim();
         // Normalize keys if needed, but Npgsql is case-insensitive usually.
         // We store as provided, but getters handle aliases.
         // Actually, let's store with proper casing or handle in getters.
@@ -139,6 +199,45 @@ class NpgsqlConnectionStringBuilder {
       }
     }
   }
+
+  String? _get(String key, [String? alias1, String? alias2]) {
+    final aliases = [
+      key,
+      if (alias1 != null) alias1,
+      if (alias2 != null) alias2
+    ];
+    for (final alias in aliases) {
+      final exact = _parameters[alias];
+      if (exact != null) {
+        return exact;
+      }
+    }
+
+    for (final entry in _parameters.entries) {
+      for (final alias in aliases) {
+        if (_normalizeKey(entry.key) == _normalizeKey(alias)) {
+          return entry.value;
+        }
+      }
+    }
+    return null;
+  }
+
+  int _getInt(int fallback, String key, [String? alias1, String? alias2]) {
+    final value = int.tryParse(_get(key, alias1, alias2) ?? '');
+    return value == null || value < 0 ? fallback : value;
+  }
+
+  bool _getBool(bool fallback, String key, [String? alias1, String? alias2]) {
+    final value = _get(key, alias1, alias2)?.trim().toLowerCase();
+    if (value == null || value.isEmpty) {
+      return fallback;
+    }
+    return const {'1', 'true', 'yes', 'on'}.contains(value);
+  }
+
+  static String _normalizeKey(String key) =>
+      key.replaceAll(' ', '').replaceAll('_', '').toLowerCase();
 
   @override
   String toString() {

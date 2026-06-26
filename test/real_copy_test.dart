@@ -1,15 +1,13 @@
-import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
+
+import 'test_config.dart';
 
 void main() {
   test('Real COPY Integration Test', () async {
-    const connString =
-        'Host=localhost;Port=5432;Database=postgres;Username=dart;Password=dart;SSL Mode=Disable';
-    final conn = NpgsqlConnection(connString);
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
 
     try {
-      await conn.open();
-
       // Setup table
       await conn
           .createCommand('DROP TABLE IF EXISTS table_copy')
@@ -54,12 +52,6 @@ void main() {
       await reader.close();
 
       print('Real COPY Integration Test Passed');
-    } catch (e) {
-      if (e.toString().contains('SocketException')) {
-        print('Skipping COPY test: Postgres not found');
-        return;
-      }
-      rethrow;
     } finally {
       await conn.close();
     }

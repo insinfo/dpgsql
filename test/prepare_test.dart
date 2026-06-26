@@ -1,15 +1,14 @@
 import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
 
+import 'test_config.dart';
+
 void main() {
   test('Prepare and Execute Test', () async {
-    const connString =
-        'Host=localhost;Port=5432;Database=postgres;Username=dart;Password=dart;SSL Mode=Disable';
-    final conn = NpgsqlConnection(connString);
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
 
     try {
-      await conn.open();
-
       // Setup table
       await conn
           .createCommand('DROP TABLE IF EXISTS table_prep')
@@ -23,7 +22,8 @@ void main() {
           .executeNonQuery();
 
       // Prepare Select
-      final cmd = conn.createCommand('SELECT val FROM table_prep WHERE id = @id');
+      final cmd =
+          conn.createCommand('SELECT val FROM table_prep WHERE id = @id');
       cmd.parameters.add(NpgsqlParameter('id', 1)); // Initial value
 
       print('Preparing command...');
@@ -48,13 +48,29 @@ void main() {
       await reader.close();
 
       print('Prepare Test Passed');
-    } catch (e) {
-      if (e.toString().contains('SocketException') ||
-          e.toString().contains('Connection refused')) {
-        print('Skipping Prepare test: Postgres not found');
-        return;
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('Unprepared named parameters execute without double SQL rewrite',
+      () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      final cmd = conn.createCommand('SELECT @a::int + @b::int');
+      cmd.parameters.addWithValue('a', 40);
+      cmd.parameters.addWithValue('b', 2);
+
+      final reader = await cmd.executeReader();
+      try {
+        expect(await reader.read(), isTrue);
+        expect(reader.getValue(0), equals(42));
+        expect(await reader.read(), isFalse);
+      } finally {
+        await reader.close();
       }
-      rethrow;
     } finally {
       await conn.close();
     }

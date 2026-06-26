@@ -84,6 +84,7 @@ class NpgsqlCommand {
       plan.sql,
       parameters: plan.parameters,
       statementName: plan.statementName,
+      rewriteParameters: plan.rewriteParameters,
     );
   }
 
@@ -113,7 +114,8 @@ class NpgsqlCommand {
       statementName = _statementName;
       sqlToExecute = _rewrittenSql ?? commandText;
 
-      if (_orderedParameterNames != null && _orderedParameterNames!.isNotEmpty) {
+      if (_orderedParameterNames != null &&
+          _orderedParameterNames!.isNotEmpty) {
         final orderedParams = NpgsqlParameterCollection();
         for (final name in _orderedParameterNames!) {
           final param = parameters.firstWhere(
@@ -139,6 +141,7 @@ class NpgsqlCommand {
       sql: sqlToExecute,
       parameters: paramsToUse,
       statementName: statementName,
+      rewriteParameters: false,
     );
   }
 }
@@ -149,11 +152,13 @@ class NpgsqlCommandExecutionPlan {
     required this.sql,
     this.parameters,
     this.statementName,
+    this.rewriteParameters = true,
   });
 
   final String sql;
   final NpgsqlParameterCollection? parameters;
   final String? statementName;
+  final bool rewriteParameters;
 
   bool get hasParameters => parameters != null && parameters!.isNotEmpty;
 }

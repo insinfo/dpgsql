@@ -177,4 +177,30 @@ void main() {
       expect(i.days, 1);
     });
   });
+
+  group('NpgsqlDecimal', () {
+    test('toString formats base-10000 digits', () {
+      const value = NpgsqlDecimal(
+        ndigits: 2,
+        weight: 0,
+        sign: 0,
+        dscale: 2,
+        digits: [123, 4500],
+      );
+
+      expect(value.toString(), '123.45');
+    });
+
+    test('toString formats negative fractional value', () {
+      const value = NpgsqlDecimal(
+        ndigits: 1,
+        weight: -1,
+        sign: 0x4000,
+        dscale: 4,
+        digits: [1250],
+      );
+
+      expect(value.toString(), '-0.1250');
+    });
+  });
 }

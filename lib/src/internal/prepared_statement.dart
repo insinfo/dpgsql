@@ -81,7 +81,9 @@ class PreparedStatement {
       manager.autoPrepared[autoPreparedSlotIndex] = statementBeingReplaced;
       if (statementBeingReplaced != null) {
         statementBeingReplaced!.state = PreparedState.prepared;
+        statementBeingReplaced!.autoPreparedSlotIndex = autoPreparedSlotIndex;
       }
+      autoPreparedSlotIndex = -1;
     }
 
     state = PreparedState.unprepared;
@@ -145,6 +147,9 @@ class PreparedStatementManager {
   /// Auto-prepared statements (LRU cache).
   final List<PreparedStatement?> autoPrepared = [];
 
+  /// Prepared statements evicted locally and waiting for Close on the backend.
+  final List<PreparedStatement> _pendingUnprepare = [];
+
   int numPrepared = 0;
   int _nextPreparedStatementIndex = 0;
 
@@ -198,19 +203,37 @@ class PreparedStatementManager {
       existing.refreshLastUsed();
       existing.usages++;
 
-      // Check if ready to promote to prepared
-      if (!existing.isPrepared &&
-          existing.state == PreparedState.notPrepared &&
-          existing.usages >= usagesBeforeAutoPrepare) {
-        // Ready to prepare
-        return existing;
-      }
+      if (!existing.doParametersMatch(parameterOids)) {
+        if (existing.isExplicit) {
+          return null;
+        }
+        bySql.remove(sql);
+        if (!existing.isExplicit && existing.autoPreparedSlotIndex >= 0) {
+          autoPrepared[existing.autoPreparedSlotIndex] = null;
+          existing.autoPreparedSlotIndex = -1;
+        }
+        if (existing.isPrepared) {
+          numPrepared--;
+          existing.state = PreparedState.beingUnprepared;
+          _pendingUnprepare.add(existing);
+        } else {
+          existing.state = PreparedState.unprepared;
+        }
+      } else {
+        // Check if ready to promote to prepared
+        if (!existing.isPrepared &&
+            existing.state == PreparedState.notPrepared &&
+            existing.usages >= usagesBeforeAutoPrepare) {
+          // Ready to prepare
+          return existing;
+        }
 
-      if (existing.isPrepared) {
-        _recordHit();
-        return existing;
+        if (existing.isPrepared) {
+          _recordHit();
+          return existing;
+        }
+        return null;
       }
-      return null;
     }
 
     // Create new candidate
@@ -224,6 +247,9 @@ class PreparedStatementManager {
     ps.refreshLastUsed();
 
     bySql[sql] = ps;
+    if (ps.usages >= usagesBeforeAutoPrepare) {
+      return ps;
+    }
     return null; // Not ready for preparation yet
   }
 
@@ -231,7 +257,50 @@ class PreparedStatementManager {
   void clear() {
     bySql.clear();
     autoPrepared.clear();
+    _pendingUnprepare.clear();
     numPrepared = 0;
+  }
+
+  /// Marks an auto-prepare candidate as being prepared and assigns a stable
+  /// server-side statement name.
+  PreparedStatement beginAutoPrepare(
+      PreparedStatement candidate, List<int> parameterOids) {
+    if (maxAutoPrepared <= 0) {
+      throw StateError('Auto prepare is disabled');
+    }
+
+    if (!identical(bySql[candidate.sql], candidate)) {
+      bySql[candidate.sql] = candidate;
+    }
+
+    _ensureAutoPreparedSlotCapacity(candidate);
+    candidate.name ??= _generateStatementName();
+    candidate.setParamTypes(parameterOids);
+    candidate.state = PreparedState.beingPrepared;
+    candidate.refreshLastUsed();
+    return candidate;
+  }
+
+  /// Completes an automatic prepare operation after the backend has accepted
+  /// the Parse/Bind flow.
+  void completeAutoPrepare(PreparedStatement statement) {
+    if (statement.state == PreparedState.prepared) {
+      return;
+    }
+    statement.state = PreparedState.prepared;
+    statement.refreshLastUsed();
+    numPrepared++;
+  }
+
+  /// Takes auto-prepared statements that were evicted and still need to be
+  /// closed on the backend connection.
+  List<PreparedStatement> takePendingUnprepare() {
+    if (_pendingUnprepare.isEmpty) {
+      return const [];
+    }
+    final pending = List<PreparedStatement>.of(_pendingUnprepare);
+    _pendingUnprepare.clear();
+    return pending;
   }
 
   // Cache Metrics
@@ -285,6 +354,7 @@ class PreparedStatementManager {
     if (lruStatement != null && lruIndex >= 0) {
       // Remove from autoPrepared list
       autoPrepared[lruIndex] = null;
+      lruStatement.autoPreparedSlotIndex = -1;
 
       // Remove from bySql map
       bySql.remove(lruStatement.sql);
@@ -292,6 +362,10 @@ class PreparedStatementManager {
       // Decrement counter
       if (lruStatement.isPrepared) {
         numPrepared--;
+        lruStatement.state = PreparedState.beingUnprepared;
+        _pendingUnprepare.add(lruStatement);
+      } else {
+        lruStatement.state = PreparedState.unprepared;
       }
 
       return lruStatement;
@@ -322,6 +396,39 @@ class PreparedStatementManager {
       final toEvict = (maxAutoPrepared * 0.1).ceil();
       evictLRUMultiple(toEvict);
     }
+  }
+
+  void _ensureAutoPreparedSlotCapacity(PreparedStatement candidate) {
+    if (candidate.autoPreparedSlotIndex >= 0) {
+      return;
+    }
+
+    for (var i = 0; i < autoPrepared.length; i++) {
+      if (autoPrepared[i] == null) {
+        autoPrepared[i] = candidate;
+        candidate.autoPreparedSlotIndex = i;
+        return;
+      }
+    }
+
+    if (autoPrepared.length < maxAutoPrepared) {
+      candidate.autoPreparedSlotIndex = autoPrepared.length;
+      autoPrepared.add(candidate);
+      return;
+    }
+
+    final evicted = evictLRU();
+    if (evicted != null) {
+      final slot = autoPrepared.indexOf(null);
+      if (slot < 0) {
+        throw StateError('No auto-prepare slot is available');
+      }
+      candidate.autoPreparedSlotIndex = slot;
+      autoPrepared[slot] = candidate;
+      return;
+    }
+
+    throw StateError('No auto-prepare slot is available');
   }
 
   /// Get current cache size percentage.

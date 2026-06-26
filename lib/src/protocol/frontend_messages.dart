@@ -159,6 +159,23 @@ class FrontendMessages {
     }, flush: flush);
   }
 
+  /// Close: 'C' + ('S' para statement ou 'P' para portal) + nome.
+  Future<void> writeCloseStatement(String statementName,
+      {bool flush = true}) async {
+    await _writeClose(_charCode('S'), statementName, flush: flush);
+  }
+
+  Future<void> writeClosePortal(String portalName, {bool flush = true}) async {
+    await _writeClose(_charCode('P'), portalName, flush: flush);
+  }
+
+  Future<void> _writeClose(int target, String name, {bool flush = true}) async {
+    await _writer.writeMessage(_charCode('C'), (body) {
+      body.writeUint8(target);
+      body.writeBytes(_encodeCString(name));
+    }, flush: flush);
+  }
+
   /// Execute: 'E' + portal + max rows.
   Future<void> writeExecute({
     String portalName = '',
@@ -172,11 +189,11 @@ class FrontendMessages {
   }
 
   /// Sync: 'S' sem payload.
-    Future<void> writeSync({bool flush = true}) =>
+  Future<void> writeSync({bool flush = true}) =>
       _writer.writeMessage(_charCode('S'), (_) {}, flush: flush);
 
   /// Terminate: 'X' sem payload.
-    Future<void> writeTerminate({bool flush = true}) =>
+  Future<void> writeTerminate({bool flush = true}) =>
       _writer.writeMessage(_charCode('X'), (_) {}, flush: flush);
 
   /// CancelRequest: Length(16) + Code(80877102) + PID + Key.

@@ -6,11 +6,17 @@ import 'protocol/backend_messages.dart';
 /// Provides an API for engaging in a binary COPY operation.
 /// Porting NpgsqlBinaryImporter.cs
 class NpgsqlBinaryImporter {
-  NpgsqlBinaryImporter(this._connector, this._copyCommand);
+  NpgsqlBinaryImporter(
+    this._connector,
+    this._copyCommand, [
+    this._onClosed,
+  ]);
 
   final NpgsqlConnector _connector;
   final String _copyCommand;
+  final void Function(bool reusable)? _onClosed;
   bool _isDisposed = false;
+  bool _notifiedClosed = false;
 
   static final Uint8List _signature =
       Uint8List.fromList([80, 71, 67, 79, 80, 89, 10, 255, 13, 10, 0]);
@@ -91,6 +97,7 @@ class NpgsqlBinaryImporter {
     await _connector.awaitCopyComplete();
 
     _isDisposed = true;
+    _notifyClosed(reusable: true);
   }
 
   /// Closes the importer. If complete() was not called, this rolls back (CopyFail).
@@ -103,5 +110,14 @@ class NpgsqlBinaryImporter {
       // Ignore
     }
     _isDisposed = true;
+    _notifyClosed(reusable: false);
+  }
+
+  void _notifyClosed({required bool reusable}) {
+    if (_notifiedClosed) {
+      return;
+    }
+    _notifiedClosed = true;
+    _onClosed?.call(reusable);
   }
 }

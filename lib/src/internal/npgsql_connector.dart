@@ -20,6 +20,7 @@ import 'scram_authenticator.dart';
 import 'sql_rewriter.dart';
 import 'pipeline_command_queue.dart';
 import 'pending_command.dart';
+import 'prepared_statement.dart';
 import '../npgsql_notification_event_args.dart';
 import '../ssl_mode.dart';
 
@@ -36,7 +37,12 @@ class NpgsqlConnector {
     this.trustServerCertificate = false,
     this.encoding = utf8,
     this.replication = false,
-  });
+    int maxAutoPrepare = 0,
+    int autoPrepareMinUsages = 5,
+  }) : preparedStatementManager = PreparedStatementManager(
+          maxAutoPrepared: maxAutoPrepare,
+          usagesBeforeAutoPrepare: autoPrepareMinUsages,
+        );
 
   final String host;
   final int port;
@@ -47,6 +53,7 @@ class NpgsqlConnector {
   final bool trustServerCertificate;
   final Encoding encoding;
   final bool replication;
+  final PreparedStatementManager preparedStatementManager;
 
   Socket? _socket;
   SocketBinaryInput? _readBuffer;
@@ -557,10 +564,12 @@ class NpgsqlConnector {
       statementName: statementName,
       query: sql,
       parameterTypeOids: paramOids,
+      flush: false,
     );
 
     // 2. Describe Statement
-    await _frontendMessages!.writeDescribeStatement(statementName);
+    await _frontendMessages!
+        .writeDescribeStatement(statementName, flush: false);
 
     // 3. Sync
     await _frontendMessages!.writeSync();
@@ -585,7 +594,9 @@ class NpgsqlConnector {
   }
 
   Future<NpgsqlDataReader> executeReader(String sql,
-      {NpgsqlParameterCollection? parameters, String? statementName}) async {
+      {NpgsqlParameterCollection? parameters,
+      String? statementName,
+      bool rewriteParameters = true}) async {
     if (parameters != null && parameters.isNotEmpty) {
       // Extended Query Protocol
 
@@ -593,23 +604,71 @@ class NpgsqlConnector {
       NpgsqlParameterCollection paramsToUse = parameters;
 
       // Rewrite SQL for @param if needed (only if not prepared statement)
-      if (statementName == null) {
+      if (statementName == null && rewriteParameters) {
         final rewritten = SqlRewriter.rewrite(sql, parameters);
         sqlToExecute = rewritten.sql;
         paramsToUse = NpgsqlParameterCollection();
         paramsToUse.addAll(rewritten.orderedParameters);
       }
 
+      final paramHandlers = <TypeHandler?>[];
+      for (final p in paramsToUse) {
+        TypeHandler? handler;
+        if (p.value != null) {
+          if (p.npgsqlDbType != null) {
+            handler = _typeRegistry.resolveByNpgsqlDbType(p.npgsqlDbType!);
+          }
+          handler ??= _typeRegistry.resolveByValue(p.value);
+        }
+        paramHandlers.add(handler);
+      }
+
+      final paramOids = <int>[];
+      for (final handler in paramHandlers) {
+        paramOids.add(handler?.oid ?? 0);
+      }
+
+      var statementNameToUse = statementName;
+      PreparedStatement? autoPrepareStatement;
+
       if (statementName == null) {
-        // Unnamed Statement Flow (Parse + Bind + Execute)
-        final paramOids = <int>[];
-        for (final p in paramsToUse) {
-          final handler = _typeRegistry.resolveByValue(p.value);
-          paramOids.add(handler?.oid ?? 0);
+        if (preparedStatementManager.maxAutoPrepared > 0) {
+          final prepared = preparedStatementManager.tryGetPreparedStatement(
+            sqlToExecute,
+            paramOids,
+          );
+          if (prepared != null) {
+            statementNameToUse = prepared.name;
+          } else {
+            final candidate = preparedStatementManager
+                .tryGetOrCreateAutoPrepareCandidate(sqlToExecute, paramOids);
+            if (candidate != null) {
+              autoPrepareStatement = preparedStatementManager.beginAutoPrepare(
+                candidate,
+                paramOids,
+              );
+              statementNameToUse = autoPrepareStatement.name;
+            }
+          }
         }
 
-        await _frontendMessages!
-            .writeParse(query: sqlToExecute, parameterTypeOids: paramOids);
+        await _writePendingUnprepareMessages();
+
+        if (autoPrepareStatement != null) {
+          await _frontendMessages!.writeParse(
+            statementName: statementNameToUse ?? '',
+            query: sqlToExecute,
+            parameterTypeOids: paramOids,
+            flush: false,
+          );
+        } else if (statementNameToUse == null) {
+          // Unnamed Statement Flow (Parse + Bind + Execute)
+          await _frontendMessages!.writeParse(
+            query: sqlToExecute,
+            parameterTypeOids: paramOids,
+            flush: false,
+          );
+        }
       } else {
         // Prepared Statement Flow (Bind + Execute using statementName)
         // We assume Parse was done via prepare()
@@ -621,12 +680,13 @@ class NpgsqlConnector {
       final values = <Uint8List?>[];
       final formatCodes = <int>[];
 
-      for (final p in paramsToUse) {
+      for (var i = 0; i < paramsToUse.length; i++) {
+        final p = paramsToUse[i];
         if (p.value == null) {
           values.add(null);
           formatCodes.add(0); // null
         } else {
-          final handler = _typeRegistry.resolveByValue(p.value);
+          final handler = paramHandlers[i];
           if (handler != null) {
             values.add(handler.write(p.value));
             formatCodes.add(1); // Binary
@@ -639,23 +699,34 @@ class NpgsqlConnector {
 
       await _frontendMessages!.writeBind(
         portalName: '',
-        statementName: statementName ?? '',
+        statementName: statementNameToUse ?? '',
         parameterValues: values,
         parameterFormatCodes: formatCodes,
         resultFormatCodes: [1], // Request Binary for all results
+        flush: false,
       );
 
       // 3. Describe
-      await _frontendMessages!.writeDescribePortal('');
+      await _frontendMessages!.writeDescribePortal('', flush: false);
 
       // 4. Execute
-      await _frontendMessages!.writeExecute();
+      await _frontendMessages!.writeExecute(flush: false);
 
       // 5. Sync
       await _frontendMessages!.writeSync();
 
       final reader = NpgsqlDataReaderImpl(this);
-      await reader.init();
+      try {
+        await reader.init();
+        if (autoPrepareStatement != null) {
+          preparedStatementManager.completeAutoPrepare(autoPrepareStatement);
+        }
+      } catch (_) {
+        if (autoPrepareStatement != null) {
+          autoPrepareStatement.abortPrepare();
+        }
+        rethrow;
+      }
       return reader;
     } else {
       // Simple Query Protocol (Only if no parameters and no prepared statement)
@@ -666,9 +737,10 @@ class NpgsqlConnector {
           portalName: '',
           statementName: statementName,
           resultFormatCodes: [1],
+          flush: false,
         );
-        await _frontendMessages!.writeDescribePortal('');
-        await _frontendMessages!.writeExecute();
+        await _frontendMessages!.writeDescribePortal('', flush: false);
+        await _frontendMessages!.writeExecute(flush: false);
         await _frontendMessages!.writeSync();
 
         final reader = NpgsqlDataReaderImpl(this);
@@ -680,6 +752,17 @@ class NpgsqlConnector {
       final reader = NpgsqlDataReaderImpl(this);
       await reader.init();
       return reader;
+    }
+  }
+
+  Future<void> _writePendingUnprepareMessages() async {
+    final pending = preparedStatementManager.takePendingUnprepare();
+    for (final statement in pending) {
+      final name = statement.name;
+      if (name == null || name.isEmpty) {
+        continue;
+      }
+      await _frontendMessages!.writeCloseStatement(name, flush: false);
     }
   }
 

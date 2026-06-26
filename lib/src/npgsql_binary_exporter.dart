@@ -8,11 +8,17 @@ import 'io/binary_input.dart';
 /// Provides an API for engaging in a binary COPY TO STDOUT operation.
 /// Porting NpgsqlBinaryExporter.cs
 class NpgsqlBinaryExporter {
-  NpgsqlBinaryExporter(this._connector, this._copyCommand);
+  NpgsqlBinaryExporter(
+    this._connector,
+    this._copyCommand, [
+    this._onClosed,
+  ]);
 
   final NpgsqlConnector _connector;
   final String _copyCommand;
+  final void Function(bool reusable)? _onClosed;
   bool _isDisposed = false;
+  bool _notifiedClosed = false;
   late _CopyStreamBinaryInput _input;
 
   static final Uint8List _signature =
@@ -91,6 +97,17 @@ class NpgsqlBinaryExporter {
     if (_isDisposed) return;
     await _connector.awaitCopyComplete();
     _isDisposed = true;
+    _notifyClosed(reusable: true);
+  }
+
+  Future<void> close() => dispose();
+
+  void _notifyClosed({required bool reusable}) {
+    if (_notifiedClosed) {
+      return;
+    }
+    _notifiedClosed = true;
+    _onClosed?.call(reusable);
   }
 }
 

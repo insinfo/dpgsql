@@ -23,8 +23,21 @@ class NpgsqlConnection {
   final String connectionString;
   NpgsqlConnector? _connector;
   ConnectionState _state = ConnectionState.closed;
+  int _activeReaderCount = 0;
+  bool _activeTransaction = false;
+  bool _activeCopyOperation = false;
+  bool _discardConnectorOnClose = false;
 
   ConnectionState get state => _state;
+  bool get hasActiveReader => _activeReaderCount > 0;
+  bool get hasActiveTransaction => _activeTransaction;
+  bool get hasActiveCopyOperation => _activeCopyOperation;
+  bool get isSafeToReturnToPool =>
+      !_discardConnectorOnClose &&
+      !hasActiveReader &&
+      !hasActiveTransaction &&
+      !hasActiveCopyOperation &&
+      !inPipelineMode;
 
   /// Creates and returns a NpgsqlCommand object associated with the current connection.
   NpgsqlCommand createCommand(String commandText) {
@@ -65,6 +78,8 @@ class NpgsqlConnection {
         sslMode: builder.sslMode,
         trustServerCertificate: builder.trustServerCertificate,
         encoding: builder.encoding,
+        maxAutoPrepare: builder.maxAutoPrepare,
+        autoPrepareMinUsages: builder.autoPrepareMinUsages,
       );
 
       _connector!.notifications.listen((e) {
@@ -86,10 +101,14 @@ class NpgsqlConnection {
   /// Closes the connection to the database.
   Future<void> close() async {
     if (_connector != null) {
+      final connector = _connector!;
       if (_returnToPoolAction != null) {
-        _returnToPoolAction(_connector!);
+        if (!isSafeToReturnToPool) {
+          await connector.close();
+        }
+        _returnToPoolAction(connector);
       } else {
-        await _connector!.close();
+        await connector.close();
       }
       _connector = null;
     }
@@ -136,16 +155,28 @@ class NpgsqlConnection {
     final reader = await executeReader(sql);
     await reader.close();
 
-    return NpgsqlTransaction(this, isolationLevel);
+    _activeTransaction = true;
+    return NpgsqlTransaction(
+      this,
+      isolationLevel,
+      onCompleted: () {
+        _activeTransaction = false;
+      },
+    );
   }
 
   Future<NpgsqlDataReader> executeReader(String commandText,
-      {NpgsqlParameterCollection? parameters, String? statementName}) async {
+      {NpgsqlParameterCollection? parameters,
+      String? statementName,
+      bool rewriteParameters = true}) async {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.executeReader(commandText,
-        parameters: parameters, statementName: statementName);
+    final reader = await _connector!.executeReader(commandText,
+        parameters: parameters,
+        statementName: statementName,
+        rewriteParameters: rewriteParameters);
+    return _trackReader(reader);
   }
 
   Future<void> prepare(String commandText, String statementName,
@@ -183,29 +214,52 @@ class NpgsqlConnection {
   /// Starts a binary COPY FROM STDIN operation.
   Future<NpgsqlBinaryImporter> beginBinaryImport(String copyFromCommand) async {
     if (_connector == null) throw StateError('Connection closed');
-    final importer = NpgsqlBinaryImporter(_connector!, copyFromCommand);
-    await importer.init();
-    return importer;
+    _activeCopyOperation = true;
+    try {
+      final importer = NpgsqlBinaryImporter(
+        _connector!,
+        copyFromCommand,
+        _handleCopyOperationClosed,
+      );
+      await importer.init();
+      return importer;
+    } catch (_) {
+      _activeCopyOperation = false;
+      _discardConnectorOnClose = true;
+      rethrow;
+    }
   }
 
   /// Starts a binary COPY TO STDOUT operation.
   Future<NpgsqlBinaryExporter> beginBinaryExport(String copyToCommand) async {
     if (_connector == null) throw StateError('Connection closed');
-    final exporter = NpgsqlBinaryExporter(_connector!, copyToCommand);
-    await exporter.init();
-    return exporter;
+    _activeCopyOperation = true;
+    try {
+      final exporter = NpgsqlBinaryExporter(
+        _connector!,
+        copyToCommand,
+        _handleCopyOperationClosed,
+      );
+      await exporter.init();
+      return exporter;
+    } catch (_) {
+      _activeCopyOperation = false;
+      _discardConnectorOnClose = true;
+      rethrow;
+    }
   }
 
   NpgsqlBatch createBatch() {
     return NpgsqlBatch(this);
   }
 
-  Future<NpgsqlDataReader> executeBatch(NpgsqlBatch batch) {
+  Future<NpgsqlDataReader> executeBatch(NpgsqlBatch batch) async {
     if (_state != ConnectionState.open) {
       throw StateError('Connection is not open');
     }
     // We need to implement executeBatch in NpgsqlConnector
-    return _connector!.executeBatch(batch);
+    final reader = await _connector!.executeBatch(batch);
+    return _trackReader(reader);
   }
 
   // Pipeline Mode API
@@ -273,7 +327,8 @@ class NpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection is closed');
     }
-    return _connector!.createPipelineReaderForCommand(command);
+    final reader = await _connector!.createPipelineReaderForCommand(command);
+    return _trackReader(reader);
   }
 
   /// Creates a reader that will iterate over multiple pending commands in order.
@@ -282,7 +337,8 @@ class NpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection is closed');
     }
-    return _connector!.createPipelineReader(commands);
+    final reader = await _connector!.createPipelineReader(commands);
+    return _trackReader(reader);
   }
 
   /// Execute a query with optional parameter substitution.
@@ -411,7 +467,66 @@ class NpgsqlConnection {
       rethrow;
     }
 
-    return _connector!
+    final reader = await _connector!
         .createPipelineReader(List.unmodifiable(pendingCommands));
+    return _trackReader(reader);
+  }
+
+  NpgsqlDataReader _trackReader(NpgsqlDataReader reader) {
+    _activeReaderCount++;
+    return _TrackedNpgsqlDataReader(reader, () {
+      if (_activeReaderCount > 0) {
+        _activeReaderCount--;
+      }
+    });
+  }
+
+  void _handleCopyOperationClosed(bool reusable) {
+    _activeCopyOperation = false;
+    if (!reusable) {
+      _discardConnectorOnClose = true;
+    }
+  }
+}
+
+class _TrackedNpgsqlDataReader implements NpgsqlDataReader {
+  _TrackedNpgsqlDataReader(this._inner, this._onClosed);
+
+  final NpgsqlDataReader _inner;
+  final void Function() _onClosed;
+  bool _closed = false;
+
+  @override
+  int get fieldCount => _inner.fieldCount;
+
+  @override
+  int get recordsAffected => _inner.recordsAffected;
+
+  @override
+  dynamic operator [](dynamic index) => _inner[index];
+
+  @override
+  dynamic getValue(int ordinal) => _inner.getValue(ordinal);
+
+  @override
+  int getOrdinal(String name) => _inner.getOrdinal(name);
+
+  @override
+  Future<bool> nextResult() => _inner.nextResult();
+
+  @override
+  Future<bool> read() => _inner.read();
+
+  @override
+  Future<void> close() async {
+    if (_closed) {
+      return;
+    }
+    _closed = true;
+    try {
+      await _inner.close();
+    } finally {
+      _onClosed();
+    }
   }
 }

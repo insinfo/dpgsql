@@ -1,0 +1,64 @@
+name: Dart Testing
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  postgresql:
+    name: PostgreSQL ${{ matrix.postgres-version }} (Dart ${{ matrix.sdk }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        sdk: [3.6.0]
+        postgres-version: ['14', '15', '16', '17']
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres-version }}
+        env:
+          POSTGRES_DB: dart_test
+          POSTGRES_USER: dart
+          POSTGRES_PASSWORD: dart
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -h localhost -U dart -d dart_test"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=12
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Setup Dart SDK
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: ${{ matrix.sdk }}
+
+      - name: Install Dart dependencies
+        run: dart pub get
+
+      - name: Analyze Dart code
+        run: dart analyze
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Verify PostgreSQL installation
+        env:
+          PGPASSWORD: dart
+        run: |
+          psql --version
+          psql -h 127.0.0.1 -U dart -d dart_test -c 'SELECT version();'
+
+      - name: Run Dart tests on PostgreSQL ${{ matrix.postgres-version }}
+        env:
+          DPGSQL_TEST_DB: Host=127.0.0.1;Port=5432;Database=dart_test;Username=dart;Password=dart;SSL Mode=Disable
+        run: dart run test --concurrency 1 --chain-stack-traces --platform vm

@@ -93,4 +93,7 @@
 !**/ios/**/default.perspectivev3
 
 referencias/
+benchmarks/reports/
+benchmarks/bin/
+benchmarks/php_benchmark/vendor/
 

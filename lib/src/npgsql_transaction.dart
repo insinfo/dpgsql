@@ -4,10 +4,13 @@ import 'npgsql_connection.dart';
 import 'isolation_level.dart';
 
 class NpgsqlTransaction {
-  NpgsqlTransaction(this._connection, this.isolationLevel);
+  NpgsqlTransaction(this._connection, this.isolationLevel,
+      {void Function()? onCompleted})
+      : _onCompleted = onCompleted;
 
   final NpgsqlConnection _connection;
   final IsolationLevel isolationLevel;
+  final void Function()? _onCompleted;
 
   bool _isCompleted = false;
 
@@ -18,7 +21,7 @@ class NpgsqlTransaction {
     _checkCompleted();
     final reader = await _connection.executeReader('COMMIT');
     await reader.close();
-    _isCompleted = true;
+    _complete();
   }
 
   /// Rolls back a transaction from a pending state.
@@ -26,7 +29,7 @@ class NpgsqlTransaction {
     _checkCompleted();
     final reader = await _connection.executeReader('ROLLBACK');
     await reader.close();
-    _isCompleted = true;
+    _complete();
   }
 
   /// Creates a savepoint in the transaction.
@@ -56,5 +59,13 @@ class NpgsqlTransaction {
       throw StateError(
           'This NpgsqlTransaction has completed; it is no longer usable.');
     }
+  }
+
+  void _complete() {
+    if (_isCompleted) {
+      return;
+    }
+    _isCompleted = true;
+    _onCompleted?.call();
   }
 }

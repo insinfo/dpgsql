@@ -1,15 +1,13 @@
-import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
+
+import 'test_config.dart';
 
 void main() {
   test('Real COPY Export Integration Test', () async {
-    const connString =
-        'Host=localhost;Port=5432;Database=postgres;Username=dart;Password=dart;SSL Mode=Disable';
-    final conn = NpgsqlConnection(connString);
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
 
     try {
-      await conn.open();
-
       // Setup table
       await conn
           .createCommand('DROP TABLE IF EXISTS table_copy_out')
@@ -67,13 +65,6 @@ void main() {
       print('Binary Export Completed.');
 
       print('Real COPY Export Integration Test Passed');
-    } catch (e) {
-      if (e.toString().contains('SocketException') ||
-          e.toString().contains('Connection refused')) {
-        print('Skipping COPY Export test: Postgres not found');
-        return;
-      }
-      rethrow;
     } finally {
       await conn.close();
     }

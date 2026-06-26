@@ -1,31 +1,12 @@
 // Integration tests for pipeline features against a real PostgreSQL server
-// Requires a local instance with credentials: user dart / password dart
-// Database: postgres, Host: localhost, Port: 5432
-
-import 'dart:io';
-
-import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
 
-const _connString =
-    'Host=localhost;Port=5432;Database=postgres;Username=dart;Password=dart;SSL Mode=Disable';
-
-Future<NpgsqlConnection?> _openConnectionOrSkip() async {
-  final conn = NpgsqlConnection(_connString);
-  try {
-    await conn.open();
-    return conn;
-  } on SocketException catch (e) {
-    // Allow running tests without a local Postgres instance.
-    // Users see a clear message but the suite does not fail.
-    print('Skipping real pipeline test: $e');
-    return null;
-  }
-}
+import 'test_config.dart';
 
 void main() {
-  test('executeCommandsPipelined mixes prepared and unprepared commands', () async {
-    final conn = await _openConnectionOrSkip();
+  test('executeCommandsPipelined mixes prepared and unprepared commands',
+      () async {
+    final conn = await openRealConnectionOrSkip();
     if (conn == null) return;
 
     try {
@@ -34,8 +15,7 @@ void main() {
           .executeNonQuery();
 
       await conn
-          .createCommand(
-              'CREATE TABLE pipeline_mix_validation ('
+          .createCommand('CREATE TABLE pipeline_mix_validation ('
               'id serial PRIMARY KEY, '
               'name text NOT NULL, '
               'category text NOT NULL, '
@@ -95,8 +75,10 @@ void main() {
     }
   });
 
-  test('executeCommandsPipelined handles concurrent pipelines on multiple connections', () async {
-    final setupConn = await _openConnectionOrSkip();
+  test(
+      'executeCommandsPipelined handles concurrent pipelines on multiple connections',
+      () async {
+    final setupConn = await openRealConnectionOrSkip();
     if (setupConn == null) return;
 
     try {
@@ -105,8 +87,7 @@ void main() {
           .executeNonQuery();
 
       await setupConn
-          .createCommand(
-              'CREATE TABLE pipeline_concurrency_validation ('
+          .createCommand('CREATE TABLE pipeline_concurrency_validation ('
               'id serial PRIMARY KEY, '
               'category text NOT NULL, '
               'label text NOT NULL, '
@@ -130,7 +111,7 @@ void main() {
     }
 
     Future<void> runPipeline(int index) async {
-      final conn = await _openConnectionOrSkip();
+      final conn = await openRealConnectionOrSkip();
       if (conn == null) return;
 
       try {
@@ -195,7 +176,7 @@ void main() {
 
     await Future.wait(List.generate(4, runPipeline));
 
-    final cleanupConn = await _openConnectionOrSkip();
+    final cleanupConn = await openRealConnectionOrSkip();
     if (cleanupConn == null) return;
     try {
       await cleanupConn

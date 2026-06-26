@@ -1,0 +1,8 @@
+{
+  "require": {
+    "amphp/postgres": "^2.0",
+    "voryx/pgasync": "*"
+  },
+  "minimum-stability": "stable",
+  "prefer-stable": true
+}

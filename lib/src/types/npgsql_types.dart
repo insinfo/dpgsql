@@ -352,6 +352,56 @@ class NpgsqlDecimal {
       Object.hash(ndigits, weight, sign, dscale, Object.hashAll(digits));
 
   @override
-  String toString() =>
-      'NpgsqlDecimal(sign: $sign, weight: $weight, dscale: $dscale, digits: $digits)';
+  String toString() {
+    if (sign == 0xC000) {
+      return 'NaN';
+    }
+    if (ndigits == 0 || digits.isEmpty) {
+      if (dscale <= 0) {
+        return sign == 0x4000 ? '-0' : '0';
+      }
+      final value = '0.${''.padRight(dscale, '0')}';
+      return sign == 0x4000 ? '-$value' : value;
+    }
+
+    final intGroups = weight + 1;
+    final intPart = StringBuffer();
+    final fracPart = StringBuffer();
+
+    if (intGroups <= 0) {
+      intPart.write('0');
+      for (var i = 0; i < -intGroups; i++) {
+        fracPart.write('0000');
+      }
+      for (var i = 0; i < ndigits; i++) {
+        fracPart.write(digits[i].toString().padLeft(4, '0'));
+      }
+    } else {
+      for (var i = 0; i < intGroups; i++) {
+        final digit = i < ndigits ? digits[i] : 0;
+        if (i == 0) {
+          intPart.write(digit.toString());
+        } else {
+          intPart.write(digit.toString().padLeft(4, '0'));
+        }
+      }
+
+      for (var i = intGroups; i < ndigits; i++) {
+        fracPart.write(digits[i].toString().padLeft(4, '0'));
+      }
+    }
+
+    var value = intPart.toString();
+    if (dscale > 0) {
+      var fractional = fracPart.toString();
+      if (fractional.length < dscale) {
+        fractional = fractional.padRight(dscale, '0');
+      } else if (fractional.length > dscale) {
+        fractional = fractional.substring(0, dscale);
+      }
+      value = '$value.$fractional';
+    }
+
+    return sign == 0x4000 ? '-$value' : value;
+  }
 }

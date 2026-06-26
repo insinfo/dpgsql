@@ -246,6 +246,8 @@ class MemoryBinaryInput implements BinaryInput {
   final Uint8List _buffer;
   int _offset = 0;
 
+  Uint8List get buffer => _buffer;
+  int get offset => _offset;
   int get _available => _buffer.length - _offset;
   int get remaining => _available;
 
@@ -311,6 +313,11 @@ class MemoryBinaryInput implements BinaryInput {
     final slice = Uint8List.sublistView(_buffer, _offset, _offset + length);
     _offset += length;
     return slice;
+  }
+
+  void skipBytes(int length) {
+    _ensureSync(length);
+    _offset += length;
   }
 
   void _ensureSync(int length) {

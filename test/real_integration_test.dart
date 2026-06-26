@@ -1,19 +1,16 @@
 // Integration test requiring local Postgres server
 // User: dart, Pass: dart, DB: postgres, Port: 5432
 
-import 'package:dpgsql/dpgsql.dart';
 import 'package:test/test.dart';
+
+import 'test_config.dart';
 
 void main() {
   test('Real Integration Test', () async {
-    // Only run if environment allows - for now we assume it is the user's wish
-    const connString =
-        'Host=localhost;Port=5432;Database=postgres;Username=dart;Password=dart;SSL Mode=Disable';
-    final conn = NpgsqlConnection(connString);
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
 
     try {
-      await conn.open();
-
       // Create table
       var cmd = conn.createCommand('DROP TABLE IF EXISTS test_dart_integ');
       await cmd.executeNonQuery();
@@ -68,13 +65,6 @@ void main() {
       await reader2.close();
 
       print('Real Integration Test Passed');
-    } catch (e) {
-      if (e.toString().contains('SocketException')) {
-        print(
-            'Skipping integration test: Postgres not found on localhost:5432');
-        return;
-      }
-      rethrow;
     } finally {
       await conn.close();
     }
