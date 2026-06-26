@@ -8,10 +8,12 @@ import 'dpgsql_data_reader.dart';
 import 'dpgsql_parameter_collection.dart';
 import 'dpgsql_transaction.dart';
 import 'dpgsql_connection_string_builder.dart';
+import 'data/pg_row.dart';
 import 'isolation_level.dart';
 import 'internal/dpgsql_connector.dart';
 import 'protocol/backend_messages.dart';
 import 'internal/pending_command.dart';
+import 'pg_result_mode.dart';
 
 enum ConnectionState { closed, open, connecting, executing, fetching }
 
@@ -79,6 +81,7 @@ class DpgsqlConnection {
         trustServerCertificate: builder.trustServerCertificate,
         encoding: builder.encoding,
         clientEncoding: builder.postgresClientEncoding,
+        timeZone: builder.timeZone,
         maxAutoPrepare: builder.maxAutoPrepare,
         autoPrepareMinUsages: builder.autoPrepareMinUsages,
       );
@@ -169,15 +172,108 @@ class DpgsqlConnection {
   Future<DpgsqlDataReader> executeReader(String commandText,
       {DpgsqlParameterCollection? parameters,
       String? statementName,
-      bool rewriteParameters = true}) async {
+      bool rewriteParameters = true,
+      PgResultMode resultMode = PgResultMode.typed}) async {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
     final reader = await _connector!.executeReader(commandText,
         parameters: parameters,
         statementName: statementName,
-        rewriteParameters: rewriteParameters);
+        rewriteParameters: rewriteParameters,
+        resultMode: resultMode);
     return _trackReader(reader);
+  }
+
+  Future<List<List<Object?>>> executeRows(
+    String commandText, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    bool rewriteParameters = true,
+  }) {
+    if (_connector == null) {
+      throw StateError('Connection closed');
+    }
+    return _connector!.executeRows(
+      commandText,
+      parameters: parameters,
+      statementName: statementName,
+      rewriteParameters: rewriteParameters,
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> executeMaps(
+    String commandText, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    bool rewriteParameters = true,
+    PgResultMode resultMode = PgResultMode.typed,
+  }) {
+    if (_connector == null) {
+      throw StateError('Connection closed');
+    }
+    return _connector!.executeMaps(
+      commandText,
+      parameters: parameters,
+      statementName: statementName,
+      rewriteParameters: rewriteParameters,
+      resultMode: resultMode,
+    );
+  }
+
+  Future<List<PgRow>> executePgRows(
+    String commandText, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    bool rewriteParameters = true,
+  }) {
+    if (_connector == null) {
+      throw StateError('Connection closed');
+    }
+    return _connector!.executePgRows(
+      commandText,
+      parameters: parameters,
+      statementName: statementName,
+      rewriteParameters: rewriteParameters,
+    );
+  }
+
+  Future<void> forEachPgRow(
+    String commandText,
+    FutureOr<void> Function(PgRow row) action, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    bool rewriteParameters = true,
+  }) {
+    if (_connector == null) {
+      throw StateError('Connection closed');
+    }
+    return _connector!.forEachPgRow(
+      commandText,
+      action,
+      parameters: parameters,
+      statementName: statementName,
+      rewriteParameters: rewriteParameters,
+    );
+  }
+
+  Future<void> forEachPgRowSync(
+    String commandText,
+    void Function(PgRow row) action, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    bool rewriteParameters = true,
+  }) {
+    if (_connector == null) {
+      throw StateError('Connection closed');
+    }
+    return _connector!.forEachPgRowSync(
+      commandText,
+      action,
+      parameters: parameters,
+      statementName: statementName,
+      rewriteParameters: rewriteParameters,
+    );
   }
 
   Future<void> prepare(String commandText, String statementName,
@@ -309,6 +405,7 @@ class DpgsqlConnection {
     String sql, {
     DpgsqlParameterCollection? parameters,
     String? statementName,
+    PgResultMode resultMode = PgResultMode.typed,
   }) async {
     if (_state != ConnectionState.open) {
       throw StateError('Connection is not open');
@@ -320,6 +417,7 @@ class DpgsqlConnection {
       sql: sql,
       statementName: statementName,
       parameters: parameters,
+      resultMode: resultMode,
     );
   }
 
@@ -508,6 +606,30 @@ class _TrackedDpgsqlDataReader implements DpgsqlDataReader {
 
   @override
   dynamic getValue(int ordinal) => _inner.getValue(ordinal);
+
+  @override
+  Map<String, dynamic> toMap() => _inner.toMap();
+
+  @override
+  Future<List<Map<String, dynamic>>> readAllMaps() => _inner.readAllMaps();
+
+  @override
+  bool isDBNull(int ordinal) => _inner.isDBNull(ordinal);
+
+  @override
+  int getInt(int ordinal) => _inner.getInt(ordinal);
+
+  @override
+  String getString(int ordinal) => _inner.getString(ordinal);
+
+  @override
+  double getDouble(int ordinal) => _inner.getDouble(ordinal);
+
+  @override
+  bool getBool(int ordinal) => _inner.getBool(ordinal);
+
+  @override
+  DateTime getDateTime(int ordinal) => _inner.getDateTime(ordinal);
 
   @override
   int getOrdinal(String name) => _inner.getOrdinal(name);

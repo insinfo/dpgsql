@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'ssl_mode.dart';
+import 'timezone_settings.dart';
 import 'utils/codecs/big5.dart' as dpgsql_big5;
 import 'utils/codecs/dos.dart' as dpgsql_dos;
 import 'utils/codecs/gbk.dart' as dpgsql_gbk;
@@ -35,6 +36,63 @@ class DpgsqlConnectionStringBuilder {
 
   /// PostgreSQL client_encoding value sent in the StartupMessage.
   String get postgresClientEncoding => _postgresEncodingName(clientEncoding);
+
+  TimeZoneSettings get timeZone {
+    final value = _get('TimeZone', 'Timezone', 'Time Zone') ?? 'UTC';
+    return TimeZoneSettings(
+      value,
+      forceDecodeTimestamptzAsUTC: _getBool(
+        true,
+        'Force Decode Timestamptz As UTC',
+        'ForceDecodeTimestamptzAsUTC',
+      ),
+      forceDecodeTimestampAsUTC: _getBool(
+        true,
+        'Force Decode Timestamp As UTC',
+        'ForceDecodeTimestampAsUTC',
+      ),
+      forceDecodeDateAsUTC: _getBool(
+        true,
+        'Force Decode Date As UTC',
+        'ForceDecodeDateAsUTC',
+      ),
+      useCurrentOffsetForLocalTimestamp: _getBool(
+        true,
+        'Use Current Offset For Local Timestamp',
+        'UseCurrentOffsetForLocalTimestamp',
+      ),
+      useIanaTimeZoneDatabase: _getBool(
+        false,
+        'Use IANA Time Zone Database',
+        'UseIanaTimeZoneDatabase',
+        'Use Pg Time Zone Database',
+        'UsePgTimeZoneDatabase',
+      ),
+      throwOnDateTimeInfinity: _getBool(
+        false,
+        'Throw On DateTime Infinity',
+        'ThrowOnDateTimeInfinity',
+        'Throw On Infinity',
+        'ThrowOnInfinity',
+      ),
+    );
+  }
+
+  set timeZone(TimeZoneSettings value) {
+    _parameters['TimeZone'] = value.value;
+    _parameters['Force Decode Timestamptz As UTC'] =
+        value.forceDecodeTimestamptzAsUTC.toString();
+    _parameters['Force Decode Timestamp As UTC'] =
+        value.forceDecodeTimestampAsUTC.toString();
+    _parameters['Force Decode Date As UTC'] =
+        value.forceDecodeDateAsUTC.toString();
+    _parameters['Use Current Offset For Local Timestamp'] =
+        value.useCurrentOffsetForLocalTimestamp.toString();
+    _parameters['Use IANA Time Zone Database'] =
+        value.useIanaTimeZoneDatabase.toString();
+    _parameters['Throw On DateTime Infinity'] =
+        value.throwOnDateTimeInfinity.toString();
+  }
 
   static Encoding _resolveEncoding(String name) {
     switch (_normalizeEncodingName(name)) {
@@ -356,8 +414,18 @@ class DpgsqlConnectionStringBuilder {
     return value == null || value < 0 ? fallback : value;
   }
 
-  bool _getBool(bool fallback, String key, [String? alias1, String? alias2]) {
-    final value = _get(key, alias1, alias2)?.trim().toLowerCase();
+  bool _getBool(
+    bool fallback,
+    String key, [
+    String? alias1,
+    String? alias2,
+    String? alias3,
+  ]) {
+    var raw = _get(key, alias1, alias2);
+    if (raw == null && alias3 != null) {
+      raw = _get(alias3);
+    }
+    final value = raw?.trim().toLowerCase();
     if (value == null || value.isEmpty) {
       return fallback;
     }

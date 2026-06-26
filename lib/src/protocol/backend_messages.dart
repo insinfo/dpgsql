@@ -117,6 +117,10 @@ class BackendMessageReader {
   }
 
   IBackendMessage parse(PostgresMessage message) {
+    if (message.typeCode == BackendMessageCode.dataRow.typeCode) {
+      return _parseDataRowPayload(message.payload);
+    }
+
     final code = BackendMessageCode.fromTypeCode(message.typeCode);
     final input = MemoryBinaryInput(message.payload);
 
@@ -278,6 +282,52 @@ class BackendMessageReader {
       }
     }
     return DataRowMessage.fromPayload(input.buffer, offsets, lengths);
+  }
+
+  DataRowMessage _parseDataRowPayload(Uint8List payload) {
+    if (payload.length < 2) {
+      throw StateError('DataRow payload inválido: ${payload.length}');
+    }
+
+    var offset = 0;
+    final columnCount = _readInt16(payload, offset);
+    offset += 2;
+
+    final offsets = Int32List(columnCount);
+    final lengths = Int32List(columnCount);
+    for (var i = 0; i < columnCount; i++) {
+      if (offset + 4 > payload.length) {
+        throw StateError('DataRow payload truncado');
+      }
+
+      final len = _readInt32(payload, offset);
+      offset += 4;
+      lengths[i] = len;
+      if (len == -1) {
+        offsets[i] = -1;
+      } else {
+        if (len < 0 || offset + len > payload.length) {
+          throw StateError('DataRow column length inválido: $len');
+        }
+        offsets[i] = offset;
+        offset += len;
+      }
+    }
+
+    return DataRowMessage.fromPayload(payload, offsets, lengths);
+  }
+
+  int _readInt16(Uint8List payload, int offset) {
+    final value = (payload[offset] << 8) | payload[offset + 1];
+    return value.toSigned(16);
+  }
+
+  int _readInt32(Uint8List payload, int offset) {
+    final value = (payload[offset] << 24) |
+        (payload[offset + 1] << 16) |
+        (payload[offset + 2] << 8) |
+        payload[offset + 3];
+    return value.toSigned(32);
   }
 
   ParameterDescriptionMessage _parseParameterDescription(

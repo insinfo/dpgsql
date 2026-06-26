@@ -92,14 +92,148 @@ void main() {
   });
 
   test('Timestamp without timezone behavior', () {
-    // PostgreSQL TIMESTAMP (without timezone) should preserve local time
-    // Not convert to UTC
-
-    // This is the expected behavior per PostgreSQL documentation:
-    // TIMESTAMP stores date/time without timezone info
-    // TIMESTAMPTZ stores date/time with timezone info (always UTC internally)
-
     expect(DateTime(2024, 7, 19, 11, 10).isUtc, false);
     expect(DateTime.utc(2024, 7, 19, 11, 10).isUtc, true);
+  });
+
+  test('TimeZoneSettings defaults match postgres/postgresql-fork UTC decode',
+      () {
+    final builder = DpgsqlConnectionStringBuilder('Host=localhost');
+    final settings = builder.timeZone;
+
+    expect(settings.value, 'UTC');
+    expect(settings.forceDecodeDateAsUTC, isTrue);
+    expect(settings.forceDecodeTimestampAsUTC, isTrue);
+    expect(settings.forceDecodeTimestamptzAsUTC, isTrue);
+    expect(settings.useCurrentOffsetForLocalTimestamp, isTrue);
+
+    final decoded = TimezoneHelper.decodeTimestamp(
+      0,
+      timeZone: settings,
+    );
+    expect(decoded, DateTime.utc(2000));
+    expect(decoded!.isUtc, isTrue);
+  });
+
+  test('TimeZoneSettings can decode timestamp as local without correction', () {
+    final builder = DpgsqlConnectionStringBuilder(
+      'Host=localhost;TimeZone=America/Sao_Paulo;'
+      'Force Decode Timestamp As UTC=false;'
+      'Force Decode Date As UTC=false;'
+      'Force Decode Timestamptz As UTC=false;'
+      'Use Current Offset For Local Timestamp=false',
+    );
+    final settings = builder.timeZone;
+
+    expect(settings.value, 'America/Sao_Paulo');
+    expect(settings.forceDecodeDateAsUTC, isFalse);
+    expect(settings.forceDecodeTimestampAsUTC, isFalse);
+    expect(settings.forceDecodeTimestamptzAsUTC, isFalse);
+    expect(settings.useCurrentOffsetForLocalTimestamp, isFalse);
+
+    final decoded = TimezoneHelper.decodeTimestamp(
+      0,
+      timeZone: settings,
+    );
+    expect(decoded, DateTime(2000));
+    expect(decoded!.isUtc, isFalse);
+  });
+
+  test('TimeZoneSettings decodes timestamptz with named IANA timezone', () {
+    final settings = const TimeZoneSettings(
+      'America/Sao_Paulo',
+      forceDecodeTimestamptzAsUTC: false,
+      useIanaTimeZoneDatabase: true,
+    );
+
+    final july2000Micros =
+        DateTime.utc(2000, 7, 1).difference(DateTime.utc(2000)).inMicroseconds;
+    final decoded = TimezoneHelper.decodeTimestampTz(
+      july2000Micros,
+      timeZone: settings,
+    );
+
+    expect(decoded!.isUtc, isFalse);
+    expect(decoded.year, 2000);
+    expect(decoded.month, 6);
+    expect(decoded.day, 30);
+    expect(decoded.hour, 21);
+    expect(decoded.timeZoneOffset, const Duration(hours: -3));
+  });
+
+  test('TimeZoneSettings can use IANA instant conversion for timestamptz', () {
+    final settings = const TimeZoneSettings(
+      'America/Sao_Paulo',
+      forceDecodeTimestamptzAsUTC: false,
+      useCurrentOffsetForLocalTimestamp: false,
+      useIanaTimeZoneDatabase: true,
+    );
+
+    final decoded = TimezoneHelper.decodeTimestampTz(
+      0,
+      timeZone: settings,
+    );
+
+    expect(decoded!.isUtc, isFalse);
+    expect(decoded.year, 1999);
+    expect(decoded.month, 12);
+    expect(decoded.day, 31);
+    expect(decoded.hour, 22);
+    expect(decoded.timeZoneOffset, const Duration(hours: -2));
+    expect(decoded.isAtSameMomentAs(DateTime.utc(2000)), isTrue);
+  });
+
+  test('TimeZoneSettings does not resolve IANA database unless enabled', () {
+    final settings = const TimeZoneSettings(
+      'Invalid/Zone',
+      forceDecodeTimestamptzAsUTC: false,
+    );
+
+    expect(
+      () => TimezoneHelper.decodeTimestampTz(0, timeZone: settings),
+      returnsNormally,
+    );
+  });
+
+  test('TimeZoneSettings decodes date/time infinity as null by default', () {
+    final settings = DpgsqlConnectionStringBuilder('Host=localhost').timeZone;
+
+    expect(settings.throwOnDateTimeInfinity, isFalse);
+    expect(TimezoneHelper.decodeDate(2147483647, timeZone: settings), isNull);
+    expect(TimezoneHelper.decodeDate(-2147483648, timeZone: settings), isNull);
+    expect(
+      TimezoneHelper.decodeTimestamp(9223372036854775807, timeZone: settings),
+      isNull,
+    );
+    expect(
+      TimezoneHelper.decodeTimestampTz(
+        -9223372036854775808,
+        timeZone: settings,
+      ),
+      isNull,
+    );
+    expect(
+        TimezoneHelper.decodeDateText('infinity', timeZone: settings), isNull);
+    expect(TimezoneHelper.decodeTimestampText('-infinity', timeZone: settings),
+        isNull);
+  });
+
+  test('TimeZoneSettings can throw on date/time infinity when configured', () {
+    final settings = DpgsqlConnectionStringBuilder(
+      'Host=localhost;Throw On DateTime Infinity=true',
+    ).timeZone;
+
+    expect(settings.throwOnDateTimeInfinity, isTrue);
+    expect(
+      () => TimezoneHelper.decodeTimestamp(
+        9223372036854775807,
+        timeZone: settings,
+      ),
+      throwsArgumentError,
+    );
+    expect(
+      () => TimezoneHelper.decodeDateText('infinity', timeZone: settings),
+      throwsArgumentError,
+    );
   });
 }

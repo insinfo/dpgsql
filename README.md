@@ -24,6 +24,8 @@ Implemented areas include:
 - Large Object API.
 - Logical replication protocol scaffolding.
 - Benchmarks against Dart AOT and PHP PostgreSQL drivers.
+- No external runtime dependencies; PostgreSQL timezone data needed for named
+  IANA timezone decoding is vendored internally and opt-in.
 
 ## Installation
 
@@ -171,6 +173,44 @@ final connection = DpgsqlConnection(
 
 Supported local codecs include UTF-8, ASCII, LATIN1-10, ISO-8859-5/6/7/8, WIN1250-1254, WIN1256, KOI8-R, KOI8-U, BIG5, and GBK. Unsupported PostgreSQL encodings fail early instead of silently falling back to UTF-8.
 
+## Timestamp And Time Zone
+
+By default `dpgsql` decodes PostgreSQL `date`, `timestamp`, and `timestamptz`
+as UTC `DateTime` values. This matches the default behavior used by the Dart
+`postgres` package and by the UTC defaults in `postgresql-fork`/`dargres`.
+
+Applications that need local `DateTime` objects can opt in through the
+connection string:
+
+```dart
+final connection = DpgsqlConnection(
+  'Host=127.0.0.1;Database=postgres;Username=dart;Password=dart;'
+  'TimeZone=America/Sao_Paulo;'
+  'Force Decode Timestamp As UTC=false;'
+  'Force Decode Timestamptz As UTC=false;'
+  'Force Decode Date As UTC=false;'
+  'Use Current Offset For Local Timestamp=false',
+);
+```
+
+Setting `TimeZone=America/Sao_Paulo` alone only configures the PostgreSQL
+session timezone. Named IANA conversion inside the driver is disabled by
+default. To opt in to the vendored PostgreSQL/IANA timezone database for
+non-UTC `timestamptz` decoding, also set:
+
+```dart
+'Use IANA Time Zone Database=true'
+```
+
+Npgsql's modern .NET behavior represents `timestamp without time zone` as an
+unspecified `DateTimeKind` and `timestamptz` as UTC. Dart does not have an
+equivalent to `DateTimeKind.Unspecified`, so `dpgsql` exposes the choice as
+UTC (`isUtc == true`) or local (`isUtc == false`) decoding.
+
+When pooling is enabled, `TimeZone` and `client_encoding` are restored after
+connection reset so a reused physical connection keeps the configured session
+semantics.
+
 ## Running Tests
 
 Unit tests can run without a local PostgreSQL server. Real integration tests use PostgreSQL when available and are mandatory in CI.
@@ -196,13 +236,128 @@ dart run test --concurrency 1 --chain-stack-traces --platform vm
 
 ## Benchmarks
 
-The benchmark suite compares Dart AOT `dpgsql` with PHP PostgreSQL drivers such as `ext-pgsql`, `PDO_PGSQL`, `voryx/PgAsync`, and `amphp/postgres`.
+The benchmark suite compares `dpgsql` against pure Dart package drivers and PHP PostgreSQL drivers. Benchmark-only Dart dependencies live in `benchmarks/pubspec.yaml`, keeping the main package free of transitive benchmark dependencies. The PowerShell runner compiles the Dart benchmarks to native AOT before measurement.
+
+Drivers currently included:
+
+| Driver | Package/runtime | Notes |
+|---|---|---|
+| `dpgsql_aot` | local `dpgsql` | Native Dart AOT executable using this driver. |
+| `postgres_fork` | `postgres_fork: ^2.8.5` | Legacy/forked pure Dart PostgreSQL driver. |
+| `postgres_3` | `postgres: ^3.5.4` | Current Dart `postgres` package line. |
+| `php_pgsql` | PHP `ext-pgsql` | Procedural native PHP PostgreSQL extension. |
+| `php_pdo_pgsql` | PHP `PDO_PGSQL` | PDO PostgreSQL native extension. |
+| `php_pgasync` | `voryx/PgAsync` | ReactPHP async client. |
+| `php_amphp_postgres` | `amphp/postgres` | Amp async PostgreSQL client. |
+
+Measured scenarios:
+
+- connection open/close;
+- `SELECT 1`;
+- parameterized query;
+- prepared or reusable parameterized query;
+- result set drain without value access;
+- result set with simple value access (`id`, `name`, `payload`);
+- result set materialized as ORM-style `Map<String, dynamic>` rows;
+- result set with fuller decoding (`id`, `name`, `numeric`, `timestamp`, `payload`).
 
 ```powershell
 .\benchmarks\run_driver_comparison.ps1
 ```
 
+Useful environment overrides:
+
+```powershell
+$env:PGHOST = "127.0.0.1"
+$env:PGPORT = "5432"
+$env:PGUSER = "dart"
+$env:PGPASSWORD = "dart"
+$env:PGDATABASE = "dart_test"
+$env:BENCH_ITERATIONS = "2000"
+$env:BENCH_RESULTSET_ITERATIONS = "20"
+$env:BENCH_RESULTSET_SIZES = "10,1000,3000,10000"
+.\benchmarks\run_driver_comparison.ps1
+```
+
 Reports are written under `benchmarks/reports/driver-comparison/`.
+The generated `summary.md` contains one comparison table for scalar queries and six result-set/application tables (`drain`, `simple`, `maps`, `maps rawText`, `typed class + JSON`, and `full`).
+
+Latest focused Dart AOT benchmark sample against PostgreSQL 16.7 on
+`127.0.0.1` (`BENCH_ITERATIONS=200`,
+`BENCH_RESULTSET_ITERATIONS=10`, `BENCH_RESULTSET_SIZES=1000`):
+
+| Scenario | dpgsql AOT | postgres_fork 2.8.5 | postgres 3.5.x | Fastest Dart driver |
+|---|---:|---:|---:|---|
+| `SELECT 1` avg ms | 0.153 | 0.220 | 0.601 | `dpgsql_aot` |
+| Parameterized avg ms | 0.207 | 0.262 | 0.719 | `dpgsql_aot` |
+| Prepared avg ms | 0.169 | 0.265 | 0.219 | `dpgsql_aot` |
+| Drain 1,000 rows avg ms | 1.812 | 4.553 | 7.237 | `dpgsql_aot` |
+| Simple 1,000 rows avg ms | 1.198 | 2.113 | 3.847 | `dpgsql_aot` |
+| Full formatted 1,000 rows avg ms | 2.511 | 4.334 | 6.859 | `dpgsql_aot` |
+
+In this focused run `dpgsql_aot` is the fastest pure Dart driver across the
+listed scalar, parameterized, prepared, drain, simple row, and full
+`numeric` + `timestamp` formatted result-set paths. Longer p95/p99 and
+allocation-focused runs remain tracked in `TODO.md`.
+
+Focused ORM-map sample against PostgreSQL 16.7 on `127.0.0.1`
+(`BENCH_ITERATIONS=200`, `BENCH_RESULTSET_ITERATIONS=5`,
+`BENCH_RESULTSET_SIZES=10000`):
+
+| Scenario | dpgsql AOT | postgres_fork 2.8.5 | postgres 3.5.x | php_pgsql | php_pdo_pgsql |
+|---|---:|---:|---:|---:|---:|
+| Typed maps 10,000 rows avg ms | 33.389 | 34.966 | 68.740 | 17.158 | 15.979 |
+| PHP-style rawText maps 10,000 rows avg ms | 20.948 | - | - | 17.158 | 15.979 |
+| Typed class + JSON 10,000 rows avg ms | 44.139 | - | - | 48.168 | 47.225 |
+
+Application-level PHP comparison, forcing type conversion, typed object
+hydration and JSON serialization:
+
+| Scenario | dpgsql AOT | php_pgsql | php_pdo_pgsql | php_pgasync | php_amphp |
+|---|---:|---:|---:|---:|---:|
+| Typed class + JSON 10,000 rows avg ms | 44.139 | 48.168 | 47.225 | 104.555 | 58.729 |
+
+`dpgsql_aot` currently leads the pure Dart drivers for ORM-style map
+materialization. `PgResultMode.rawText` is an opt-in PHP-compatible mode that
+requests text results and exposes every non-null field as `String`, reducing
+10,000-row map materialization from 33.389 ms to 20.948 ms in this local run.
+Native PHP `ext-pgsql`/`PDO_PGSQL` remains faster in the driver-only map
+microbenchmark because those extensions are C/libpq wrappers returning mostly
+strings. When PHP is forced to cast values, hydrate typed classes and serialize
+JSON, `dpgsql_aot` leads the native PHP drivers in this sample.
+
+For high-volume reads where not every column must be decoded immediately,
+prefer `DpgsqlCommand.forEachPgRow()` or `DpgsqlCommand.executePgRows()`.
+`forEachPgRow()` streams transient lazy `PgRow` views without building a result
+list; `executePgRows()` materializes lazy row views when rows must be kept after
+the command completes. Use `executeRows()` when you need a fully decoded
+`List<List<Object?>>`. Use `executeMaps()` or `DpgsqlDataReader.readAllMaps()`
+for ORM-style `Map<String, dynamic>` rows without adding an extra conversion
+layer above the reader.
+
+PostgreSQL `date`, `timestamp`, and `timestamptz` `infinity`/`-infinity`
+values are exposed as `null` by default, matching compatibility expectations
+from `postgresql-fork`/`dargres` style applications. Set
+`Throw On DateTime Infinity=true` in the connection string to fail fast instead.
+Named timezone support uses the generated Dart database in
+`lib/src/dependencies/timezone/src/pg_timezone_data.dart`; runtime code does
+not load `latest.tzf` or any external timezone file.
+
+To refresh the bundled IANA timezone database directly from IANA source files
+without `zic` or `package:timezone`, run:
+
+```bash
+dart run scripts/generate_pg_timezone_data.dart --download-iana --scope latest_all
+```
+
+The generator parses `Rule`, `Zone`, and `Link` records in Dart and writes the
+runtime Dart database directly. Use `--iana path/to/tzdata-dir-or.tar.gz` for a
+local IANA source checkout/archive. The legacy `.tzf` path is still available
+for comparison or quick regeneration from `referencias/timezone`:
+
+```bash
+dart run scripts/generate_pg_timezone_data.dart
+```
 
 ## Continuous Integration
 

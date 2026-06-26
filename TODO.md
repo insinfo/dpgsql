@@ -1,5 +1,90 @@
 # TODO dpgsql
 
+## Progresso 2026-06-26 (maps para Eloquent/Sali)
+
+- Lido o fluxo atual do `new_sali`/`eloquent`: `DatabaseService` passa `timezone=America/Sao_Paulo` como configuracao de sessao e os repositorios consomem massivamente `List<Map<String, dynamic>>`/`PDOResults`.
+- Confirmado que `eloquent` com `postgres_fork` materializa `PDOResults` via `row.toColumnMap()`, entao o caminho critico para substituir o driver no Sali precisa gerar mapas tipados com baixo overhead.
+- Adicionado `DpgsqlDataReader.toMap()` e `DpgsqlDataReader.readAllMaps()` para materializar rows nomeadas direto do reader.
+- Adicionado `DpgsqlCommand.executeMaps()` e `DpgsqlConnection.executeMaps()`.
+- Implementado fast path preparado em `DpgsqlConnector.executeMaps()`, reutilizando `RowDescription` cacheado e pulando `Describe Portal`, com decode direto para `Map<String, dynamic>` sem criar `List<Object?>` intermediaria.
+- `benchmarks/benchmark_dpgsql.dart`, `benchmark_dart_packages.dart` e `compare_benchmarks.dart` agora medem `result_sets_maps`, aproximando o benchmark do padrao usado pelo Eloquent/Sali.
+- Scripts PHP (`ext-pgsql`, `PDO_PGSQL`, `voryx/PgAsync` e `amphp/postgres`) agora tambem emitem `result_sets_maps`, usando array associativo/fetch associativo quando aplicavel.
+- Benchmarks passaram a incluir `3000` linhas por padrao (`10,1000,3000,10000`) e o runner recebeu parametro `ResultSetSizes`.
+- Resultado local com `BENCH_ITERATIONS=200`, `BENCH_RESULTSET_ITERATIONS=10`, rows `1000,3000`: `dpgsql_aot` segue liderando os drivers Dart em `maps_3000` (8.850 ms vs 11.396 ms `postgres_fork` e 22.165 ms `postgres_3`), mas ainda perde para PHP nativo (`php_pgsql` 4.215 ms e `php_pdo_pgsql` 5.141 ms). Diferenca importante: PHP entrega strings em arrays associativos, enquanto `dpgsql` decodifica valores tipados (`double`/`DateTime`) no `executeMaps()`.
+- Resultado local com rows `10000` (`BENCH_RESULTSET_ITERATIONS=5`): `dpgsql_aot` continua liderando Dart em `maps_10000` (29.945 ms vs 36.305 ms `postgres_fork` e 67.953 ms `postgres_3`), mas PHP nativo ainda vence (`php_pgsql` 13.292 ms, `php_pdo_pgsql` 17.717 ms). `php_pgasync` e `amphp/postgres` ficam atras de `dpgsql` nesse volume.
+- Adicionado `PgResultMode.rawText`, modo opt-in estilo PHP/ext-pgsql que pede formato texto no `Bind` e expoe valores como `String/null` em `getValue`, `toMap`, `readAllMaps` e `executeMaps`, mantendo `PgResultMode.typed` como padrao.
+- Implementado fast path preparado para `executeMaps(resultMode: PgResultMode.rawText)`, reutilizando `RowDescription` cacheado e evitando `Describe Portal` por execucao.
+- Resultado local apos `rawText` com rows `10000` (`BENCH_RESULTSET_ITERATIONS=5`): mapas tipados `dpgsql_aot` 32.114 ms, mapas `rawText` 18.754 ms, `php_pgsql` 14.334 ms e `php_pdo_pgsql` 16.944 ms. O modo PHP-like reduziu bastante a diferenca e ficou mais rapido que `PDO_PGSQL` em uma rodada anterior/variante, mas nesta amostra ainda nao superou `ext-pgsql`.
+- Adicionado benchmark `application_typed_json`, que força PHP e Dart a converter valores, hidratar classe tipada e serializar JSON por row. Resultado local final com rows `10000` (`BENCH_RESULTSET_ITERATIONS=5`): `dpgsql_aot` 44.139 ms, `php_pgsql` 48.168 ms, `php_pdo_pgsql` 47.225 ms, `php_pgasync` 104.555 ms e `php_amphp_postgres` 58.729 ms. Nesse cenario mais justo de aplicacao, `dpgsql_aot` venceu as opcoes PHP medidas.
+- `DpgsqlCommand` passou a reutilizar plano de comando parametrizado com checagem estrutural sem `StringBuffer` por execucao, reduzindo alocacao no hot path de comando repetido nao preparado.
+- `real_type_decode_test.dart` cobre `executeMaps`, `reader.toMap()`, `reader.readAllMaps()`, `executeMaps()` preparado e `rawText` contra PostgreSQL real.
+- Proximos passos:
+  - criar adapter `DpgsqlPDO` no `eloquent` usando `executeMaps()` para substituir `row.toColumnMap()`;
+  - medir `result_sets_maps` com `poolsize=20` e consultas reais do `processo_repository.dart`;
+  - adicionar benchmark de `first`/single-row map, comum em endpoints de detalhe.
+  - criar caminho `rawText` streaming sem materializar lista inteira para JSON/HTTP e medir contra `pg_fetch_assoc` em loop;
+  - reduzir overhead do extended protocol parametrizado sem prepare: cache de handlers/OIDs por plano e auto-prepare mais agressivo por conexao.
+  - portar o benchmark `application_typed_json` para `postgres_fork` e `postgres` para comparar hidratacao Dart completa entre drivers;
+  - criar benchmark de aplicacao real (`eloquent`/`new_sali`) com hidratacao de modelos/DTOs, query builder, pool e serializacao JSON, porque o microbenchmark de driver puro favorece `ext-pgsql` escrito em C e nao mede o custo total de framework PHP.
+
+## Progresso 2026-06-26 (TimeZoneSettings opcional)
+
+- Lido o comportamento de timestamp/timezone em `C:\MyDartProjects\postgresql-fork`, `C:\MyDartProjects\dargres`, pacote `postgres`/isoos local e `referencias/npgsql`.
+- Confirmado que `postgres`/isoos decodifica `timestamp` e `timestamptz` como UTC por padrao; `postgresql-fork` e `dargres` tambem usam flags `forceDecode*AsUTC=true` por padrao.
+- Confirmado que Npgsql moderno trata `timestamp without time zone` como `DateTimeKind.Unspecified` e `timestamptz` como UTC; no Dart isso foi exposto como escolha entre `DateTime` UTC e local, ja que nao existe `DateTimeKind.Unspecified`.
+- Adicionado `TimeZoneSettings` publico com flags opcionais `Force Decode Timestamp As UTC`, `Force Decode Timestamptz As UTC`, `Force Decode Date As UTC` e `Use Current Offset For Local Timestamp`.
+- Adicionado `Throw On DateTime Infinity`/`ThrowOnDateTimeInfinity`: por padrao `date`, `timestamp` e `timestamptz` `infinity`/`-infinity` materializam como `null` em `executeMaps`/`getValue`, preservando compatibilidade com `postgresql-fork`/`dargres` e evitando quebra no SALI; com a flag ligada, o helper volta a lancar `ArgumentError`.
+- `DpgsqlConnectionStringBuilder` agora parseia `TimeZone` e as flags de decode, propagando a configuracao para conexoes normais, pool, replicacao, type handlers, `DpgsqlDataReader` e `PgRow`.
+- `DpgsqlConnector` envia `TimeZone` no startup quando configurado e o pool restaura `TimeZone`/`client_encoding` apos reset da sessao.
+- Decode/encode binario de `date`, `timestamp` e `timestamptz` deixou de usar `epoch.add(Duration(...))` nos hot paths, usando calculo direto por micros desde Unix epoch para reduzir alocacoes em result sets grandes.
+- Paridade configuravel com `postgresql-fork`/`dargres` para timezone nomeada: vendorizado subconjunto interno de `pg_timezone`/IANA a partir das referencias locais, sem adicionar dependencia runtime externa.
+- `timestamptz` com `Force Decode Timestamptz As UTC=false` so usa nomes como `America/Sao_Paulo` e abreviacoes via banco interno quando `Use IANA Time Zone Database=true`; sem essa flag, `TimeZone` permanece apenas configuracao de sessao PostgreSQL, que e o caso atual do `new_sali`/`eloquent`.
+- `lib/src/dependencies/timezone/src/env.dart` nao aponta mais para `latest.tzf`; o driver usa `pg_timezone_data.dart`, arquivo Dart gerado/versionado. `scripts/generate_pg_timezone_data.dart` agora tambem compila fontes IANA em Dart puro (`--download-iana`/`--iana`), parseando `Rule`/`Zone`/`Link` sem `zic.c` e sem `package:timezone`; o caminho `.tzf` continua disponivel apenas para comparacao/regeneracao rapida.
+- Testes adicionados/ajustados em `timezone_encoding_test.dart` e `real_type_decode_test.dart` validando decode UTC default e decode local opcional em banco real.
+- `real_type_decode_test.dart` cobre `timestamptz` real com `TimeZone=America/Sao_Paulo;Use IANA Time Zone Database=true`, e `timezone_encoding_test.dart` cobre que uma timezone invalida nao aciona IANA quando a flag esta desligada.
+
+## Progresso 2026-06-26 (comparacao com postgresql-fork + hot path de leitura)
+
+- Corrigido caminho de referencia: `C:\MyDartProjects\postgresql-fork` e o pacote `postgres_fork` local sao a versao `2.8.5`.
+- Lido `postgresql-fork/lib` e `postgresql-fork/test`; a base possui fila de queries, statement reuse, transacoes, SSL, encoding, notificacoes e testes extensos de erro/concorrencia.
+- `DpgsqlDataReader` ganhou getters tipados (`getInt`, `getString`, `getDouble`, `getBool`, `getDateTime`) e `isDBNull`, aproximando a API do Npgsql e reduzindo overhead em ORMs que conhecem o schema.
+- `DpgsqlDataReaderImpl` passou a reaproveitar o cache lazy por result set em vez de alocar uma lista nova por linha acessada.
+- Parser de `DataRow` agora le direto do `Uint8List` da mensagem, evitando `MemoryBinaryInput` e `ByteData.sublistView` no hot path.
+- `BinaryInput.availableBytes` permite ao `PostgresMessageReader` evitar `await ensureBytes()` quando header/body ja estao no buffer.
+- `numeric` agora decodifica para `double` por padrao, alinhado ao `DpgsqlTypesConfig.recommended()`; `DpgsqlDecimal` continua disponivel para parametros/handlers explicitos.
+- `executeRows()` materializa result sets em `List<List<Object?>>` direto no conector.
+- `executePgRows()` materializa `PgRow` lazy com payload/offsets, evitando decodificacao antecipada de texto em leituras grandes.
+- `forEachPgRow()` processa `PgRow` transient direto do `DataRowMessage`, sem montar lista de linhas e sem copiar payload no caminho preparado.
+- `PgRow` ganhou fast paths diretos para `getInt`, `getString`, `getNumericDouble` e `getDateTime`, reduzindo views temporarias em leituras sequenciais.
+- `prepare()` agora cacheia `RowDescription`; execucoes preparadas materializadas pulam `Describe Portal`, seguindo mais de perto o statement reuse do `postgresql-fork`.
+- Benchmark `dpgsql_aot` passou a usar getters tipados e reutilizar `DpgsqlCommand` no cenario parametrizado.
+- Resultado local anterior (`PostgreSQL 16.7`, `BENCH_ITERATIONS=200`, rows 10/1000): `dpgsql_aot` liderava os drivers Dart em `SELECT 1`, prepared, drain de 1000 linhas e simple rows_1000; `postgres_fork` ainda liderava o cenario `full formatted rows_1000`.
+- Resultado local apos `TimeZoneSettings` + fast path de timestamp (`PostgreSQL 16.7`, `BENCH_ITERATIONS=200`, `BENCH_RESULTSET_ITERATIONS=10`, rows_1000): `dpgsql_aot` passou a liderar tambem `full formatted rows_1000` (3.054 ms vs 4.133 ms do `postgres_fork` e 7.240 ms do `postgres_3`).
+- Resultado local apos cache de plano de parametros e `forEachPgRowSync` (`PostgreSQL 16.7`, `BENCH_ITERATIONS=200`, `BENCH_RESULTSET_ITERATIONS=10`, rows_1000): `dpgsql_aot` liderou os cenarios Dart medidos (`SELECT 1`, parametrizado, prepared, drain, simple e full).
+- Proximos passos para sustentar lideranca em producao:
+  - repetir benchmark com amostras longas, p50/p95/p99, bytes alocados/op e GC;
+  - medir com concorrencia e pool (`poolsize=20`) para aproximar o perfil do `new_sali`;
+  - comparar contra PHP nativo novamente depois das mudancas;
+  - implementar `foldPgRows`/agregadores especializados para reduzir overhead de callback em loops muito grandes;
+  - reduzir copias no `executePgRows()` com ownership seguro do buffer de mensagem ou arena por result set;
+  - revisar `numeric`/`DateTime.toString()` no benchmark full para separar custo de driver de custo de formatacao Dart;
+  - comparar com o `query_queue`/`message_window` do `postgresql-fork` para portar a drenagem em lote sem perder streaming.
+
+## Progresso 2026-06-26 (benchmarks Dart/PHP completos)
+
+- Lido o benchmark existente `benchmarks/benchmark_dpgsql.dart`, `compare_benchmarks.dart` e `run_driver_comparison.ps1`.
+- Adicionado `benchmarks/pubspec.yaml` com `postgres_fork: ^2.8.5` e `postgres: ^3.5.4`, isolando dependencias comparativas fora do pacote principal.
+- Criado `benchmarks/benchmark_dart_packages.dart`, emitindo o mesmo JSON do benchmark `dpgsql_aot` para os drivers `postgres_fork` e `postgres_3`.
+- `run_driver_comparison.ps1` agora compila e executa:
+  - `dpgsql_aot`;
+  - `postgres_fork`;
+  - `postgres_3`;
+  - `php_pgsql`;
+  - `php_pdo_pgsql`;
+  - `php_pgasync`;
+  - `php_amphp_postgres`.
+- `README.md` atualizado com a matriz de drivers, cenarios medidos, variaveis de ambiente e local dos relatorios.
+
 ## Progresso 2026-06-26 (publicacao + auto-prepare robusto)
 
 - Criados `CHANGELOG.md` e `LICENSE` com MIT License (`Copyright (c) 2022-2026 Isaque Neves`).
@@ -714,10 +799,12 @@ Optimize buffer usage.
 - [x] Reuso de Uint8List/ByteData (object pooling)
 
 **6. Representação de Dados Eficiente**
-- [ ] PgRow com view sobre buffer (sem Map por linha)
-- [ ] Acesso por índice (row[0]) e por nome (row['col'])
-- [ ] Decodificação lazy (só quando acessado)
-- [ ] Minimizar alocações de String para colunas numéricas
+- [x] PgRow com view sobre buffer (sem Map por linha)
+- [x] Acesso por índice (`row[0]`) e por nome (`row.getByName('col')`)
+- [x] Decodificação lazy (só quando acessado)
+- [x] Minimizar alocações de String para colunas numéricas no caminho `executePgRows`
+- [x] API streaming/callback para processar `PgRow` sem copiar payload para lista materializada (`forEachPgRow`)
+- [ ] `foldPgRows`/agregadores especializados para leituras de altissima vazao
 
 **7. COPY Avançado**
 - [x] COPY IN/OUT básico (implementado)

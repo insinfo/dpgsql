@@ -347,6 +347,36 @@ class DpgsqlDataSource {
             .timeout(_poolMaintenanceTimeout);
       } catch (_) {}
     }
+
+    await _restoreSessionParameters(conn, connector);
+  }
+
+  Future<void> _restoreSessionParameters(
+    DpgsqlConnection conn,
+    DpgsqlConnector connector,
+  ) async {
+    final statements = <String>[];
+    final clientEncoding = connector.clientEncoding;
+    if (clientEncoding != null && clientEncoding.isNotEmpty) {
+      statements
+          .add("SET client_encoding = ${_quoteSqlLiteral(clientEncoding)}");
+    }
+    if (connector.timeZone.value.isNotEmpty) {
+      statements
+          .add("SET TIME ZONE ${_quoteSqlLiteral(connector.timeZone.value)}");
+    }
+
+    for (final sql in statements) {
+      try {
+        await conn.createCommand(sql).executeNonQuery().timeout(
+              _poolMaintenanceTimeout,
+            );
+      } catch (_) {}
+    }
+  }
+
+  static String _quoteSqlLiteral(String value) {
+    return "'${value.replaceAll("'", "''")}'";
   }
 
   DpgsqlConnector _createConnector() {
@@ -360,6 +390,7 @@ class DpgsqlDataSource {
       trustServerCertificate: _builder.trustServerCertificate,
       encoding: _builder.encoding,
       clientEncoding: _builder.postgresClientEncoding,
+      timeZone: _builder.timeZone,
       maxAutoPrepare: _builder.maxAutoPrepare,
       autoPrepareMinUsages: _builder.autoPrepareMinUsages,
     );

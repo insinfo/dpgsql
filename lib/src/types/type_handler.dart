@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'dart:convert';
 import '../dpgsql_db_type.dart';
 import '../internal/timezone_helper.dart';
+import '../timezone_settings.dart';
 import 'oid.dart';
 import 'json_handler.dart';
 import 'geometric_handlers.dart';
@@ -142,27 +143,48 @@ class DoubleHandler extends TypeHandler<double> {
 }
 
 class TimestampHandler extends TypeHandler<DateTime> {
-  const TimestampHandler();
+  const TimestampHandler({
+    this.timeZone = const TimeZoneSettings.utc(),
+    this.timestampTz = false,
+  });
+
+  final TimeZoneSettings timeZone;
+  final bool timestampTz;
+
   @override
-  int get oid => Oid.timestamp;
+  int get oid => timestampTz ? Oid.timestamptz : Oid.timestamp;
 
   @override
   DateTime read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
+    DateTime? value;
     if (isText) {
-      return DateTime.parse(encoding.decode(buffer));
+      final text = encoding.decode(buffer);
+      value = timestampTz
+          ? TimezoneHelper.decodeTimestampTzText(text, timeZone: timeZone)
+          : TimezoneHelper.decodeTimestampText(text, timeZone: timeZone);
+      if (value == null) {
+        throw ArgumentError('Timestamp value is infinity');
+      }
+      return value;
     }
     final bd = ByteData.sublistView(buffer);
     final micros = bd.getInt64(0);
 
-    final baseDt = TimezoneHelper.fixTimezoneTransition(DateTime(2000));
-    return baseDt.add(Duration(microseconds: micros));
+    value = timestampTz
+        ? TimezoneHelper.decodeTimestampTz(micros, timeZone: timeZone)
+        : TimezoneHelper.decodeTimestamp(micros, timeZone: timeZone);
+    if (value == null) {
+      throw ArgumentError('Timestamp value is infinity');
+    }
+    return value;
   }
 
   @override
   Uint8List write(DateTime value, {Encoding encoding = utf8}) {
-    final baseDt = TimezoneHelper.fixTimezoneTransition(DateTime(2000));
-    final diff = value.difference(baseDt).inMicroseconds;
+    final diff = timestampTz
+        ? TimezoneHelper.encodeTimestampTz(value)
+        : TimezoneHelper.encodeTimestamp(value, timeZone: timeZone);
     final bd = ByteData(8);
     bd.setInt64(0, diff);
     return bd.buffer.asUint8List();
@@ -170,26 +192,39 @@ class TimestampHandler extends TypeHandler<DateTime> {
 }
 
 class DateHandler extends TypeHandler<DateTime> {
-  const DateHandler();
+  const DateHandler({this.timeZone = const TimeZoneSettings.utc()});
+
+  final TimeZoneSettings timeZone;
+
   @override
   int get oid => Oid.date;
-
-  static final DateTime _pgEpoch = DateTime.utc(2000, 1, 1);
 
   @override
   DateTime read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
+    DateTime? value;
     if (isText) {
-      return DateTime.parse(encoding.decode(buffer));
+      value = TimezoneHelper.decodeDateText(
+        encoding.decode(buffer),
+        timeZone: timeZone,
+      );
+      if (value == null) {
+        throw ArgumentError('Date value is infinity');
+      }
+      return value;
     }
     final bd = ByteData.sublistView(buffer);
     final days = bd.getInt32(0);
-    return _pgEpoch.add(Duration(days: days));
+    value = TimezoneHelper.decodeDate(days, timeZone: timeZone);
+    if (value == null) {
+      throw ArgumentError('Date value is infinity');
+    }
+    return value;
   }
 
   @override
   Uint8List write(DateTime value, {Encoding encoding = utf8}) {
-    final diff = value.difference(_pgEpoch).inDays;
+    final diff = TimezoneHelper.encodeDate(value, timeZone: timeZone);
     final bd = ByteData(4);
     bd.setInt32(0, diff);
     return bd.buffer.asUint8List();
@@ -503,8 +538,14 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
 
 class TypeHandlerRegistry {
   final Map<int, TypeHandler> _oidHandlers = {};
+  static const TypeHandler<DpgsqlDecimal> _dpgsqlDecimalHandler =
+      DpgsqlDecimalHandler();
 
-  TypeHandlerRegistry({bool useDpgsqlTypes = false}) {
+  TypeHandlerRegistry({
+    bool useDpgsqlTypes = false,
+    bool useCustomDecimal = false,
+    TimeZoneSettings timeZone = const TimeZoneSettings.utc(),
+  }) {
     register(const TextHandler());
     register(const IntegerHandler());
     register(const BooleanHandler());
@@ -516,14 +557,20 @@ class TypeHandlerRegistry {
       register(const DpgsqlDateHandler());
       register(const DpgsqlTimeHandler());
       register(const DpgsqlTimestampHandler());
+      register(TimestampHandler(timeZone: timeZone, timestampTz: true));
     } else {
-      register(const DateHandler());
-      register(const TimestampHandler());
+      register(DateHandler(timeZone: timeZone));
+      register(TimestampHandler(timeZone: timeZone));
+      register(TimestampHandler(timeZone: timeZone, timestampTz: true));
     }
 
     register(const DpgsqlIntervalHandler());
     register(const DpgsqlMoneyHandler());
-    register(const DpgsqlDecimalHandler());
+    if (useDpgsqlTypes || useCustomDecimal) {
+      register(_dpgsqlDecimalHandler);
+    } else {
+      register(const NumericDoubleHandler());
+    }
 
     register(const JsonHandler());
     register(const JsonbHandler());
@@ -539,9 +586,12 @@ class TypeHandlerRegistry {
     register(RangeHandler<int>(Oid.int4range, const IntegerHandler()));
     register(RangeHandler<int>(Oid.int8range, const IntegerHandler()));
     register(RangeHandler<double>(Oid.numrange, const DoubleHandler()));
-    register(RangeHandler<DateTime>(Oid.tsrange, const TimestampHandler()));
-    register(RangeHandler<DateTime>(Oid.tstzrange, const TimestampHandler()));
-    register(RangeHandler<DateTime>(Oid.daterange, const DateHandler()));
+    register(RangeHandler<DateTime>(
+        Oid.tsrange, TimestampHandler(timeZone: timeZone)));
+    register(RangeHandler<DateTime>(Oid.tstzrange,
+        TimestampHandler(timeZone: timeZone, timestampTz: true)));
+    register(
+        RangeHandler<DateTime>(Oid.daterange, DateHandler(timeZone: timeZone)));
 
     // Arrays
     register(ArrayHandler<dynamic>(Oid.int4Array, const IntegerHandler()));
@@ -556,7 +606,6 @@ class TypeHandlerRegistry {
     _oidHandlers[Oid.unknown] = const TextHandler();
     _oidHandlers[Oid.int8] = const IntegerHandler();
     _oidHandlers[Oid.int2] = const IntegerHandler();
-    _oidHandlers[Oid.timestamptz] = const TimestampHandler();
   }
 
   void register(TypeHandler handler) {
@@ -581,7 +630,7 @@ class TypeHandlerRegistry {
     if (value is DpgsqlTimestamp) return _oidHandlers[Oid.timestamp];
     if (value is DpgsqlInterval) return _oidHandlers[Oid.interval];
     if (value is DpgsqlMoney) return _oidHandlers[Oid.money];
-    if (value is DpgsqlDecimal) return _oidHandlers[Oid.numeric];
+    if (value is DpgsqlDecimal) return _dpgsqlDecimalHandler;
 
     // Geometric Types
     if (value is DpgsqlPoint) return _oidHandlers[Oid.point];
@@ -626,7 +675,7 @@ class TypeHandlerRegistry {
     if (T == DpgsqlInterval)
       return _oidHandlers[Oid.interval] as TypeHandler<T>?;
     if (T == DpgsqlMoney) return _oidHandlers[Oid.money] as TypeHandler<T>?;
-    if (T == DpgsqlDecimal) return _oidHandlers[Oid.numeric] as TypeHandler<T>?;
+    if (T == DpgsqlDecimal) return _dpgsqlDecimalHandler as TypeHandler<T>?;
 
     if (T == DpgsqlPoint) return _oidHandlers[Oid.point] as TypeHandler<T>?;
     if (T == DpgsqlBox) return _oidHandlers[Oid.box] as TypeHandler<T>?;

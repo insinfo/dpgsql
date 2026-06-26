@@ -4,10 +4,10 @@ import 'dart:typed_data';
 
 import '../dpgsql_batch_command.dart';
 import '../dpgsql_data_reader.dart';
+import '../pg_result_mode.dart';
 import '../postgres_batch_exception.dart';
 import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
-import '../types/dpgsql_types.dart';
 import '../types/oid.dart';
 import '../types/type_handler.dart';
 import 'dpgsql_connector.dart';
@@ -18,15 +18,18 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
   DpgsqlDataReaderImpl(this._connector,
       {List<PendingCommand>? pendingCommands,
       bool drainReadyOnClose = true,
-      List<DpgsqlBatchCommand>? batchCommands})
+      List<DpgsqlBatchCommand>? batchCommands,
+      PgResultMode resultMode = PgResultMode.typed})
       : _pendingCommands = pendingCommands,
         _drainReadyOnClose = drainReadyOnClose,
-        _batchCommands = batchCommands;
+        _batchCommands = batchCommands,
+        _resultMode = resultMode;
 
   final DpgsqlConnector _connector;
   final List<PendingCommand>? _pendingCommands;
   final List<DpgsqlBatchCommand>? _batchCommands;
   final bool _drainReadyOnClose;
+  final PgResultMode _resultMode;
 
   RowDescriptionMessage? _rowDescription;
   DataRowMessage? _currentRow;
@@ -44,9 +47,6 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
   List<int>? _fieldOids;
 
   static final Object _notDecoded = Object();
-  static final DateTime _timestampEpoch =
-      TimezoneHelper.fixTimezoneTransition(DateTime(2000));
-
   Future<void> init() async {
     if (_isPipelineReader) {
       final pendingList = _pendingCommands!;
@@ -357,6 +357,12 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     final offset = row.columnOffsets[index];
     final payload = row.payload;
 
+    if (_resultMode == PgResultMode.rawText) {
+      final value = _decodeText(payload, offset, length);
+      cache[index] = value;
+      return value;
+    }
+
     final isText = _fieldIsText?[index] ?? true;
     final oid = _fieldOids?[index] ?? 0;
 
@@ -378,6 +384,195 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     final value = isText ? utf8.decode(colData) : colData;
     cache[index] = value;
     return value;
+  }
+
+  int _checkedColumnLength(int index) {
+    final row = _currentRow;
+    if (row == null) {
+      throw StateError('No current row. Call read() first.');
+    }
+    RangeError.checkValidIndex(index, row, 'ordinal', row.columnCount);
+    final length = row.columnLengths[index];
+    if (length == -1) {
+      throw StateError('Column $index is NULL');
+    }
+    return length;
+  }
+
+  @override
+  bool isDBNull(int ordinal) {
+    final row = _currentRow;
+    if (row == null) {
+      throw StateError('No current row. Call read() first.');
+    }
+    RangeError.checkValidIndex(ordinal, row, 'ordinal', row.columnCount);
+    return row.columnLengths[ordinal] == -1;
+  }
+
+  @override
+  int getInt(int ordinal) {
+    final length = _checkedColumnLength(ordinal);
+    final row = _currentRow!;
+    final offset = row.columnOffsets[ordinal];
+    final payload = row.payload;
+    final oid = _fieldOids?[ordinal] ?? 0;
+    final isText = _fieldIsText?[ordinal] ?? true;
+
+    if (isText) {
+      return int.parse(_decodeText(payload, offset, length));
+    }
+    switch (oid) {
+      case Oid.int2:
+        if (length == 2) return _readInt16(payload, offset);
+        break;
+      case Oid.int4:
+        if (length == 4) return _readInt32(payload, offset);
+        break;
+      case Oid.int8:
+        if (length == 8) return _readInt64(payload, offset);
+        break;
+    }
+
+    final value = _getValue(ordinal);
+    if (value is int) return value;
+    throw StateError('Column $ordinal is not an int');
+  }
+
+  @override
+  String getString(int ordinal) {
+    final length = _checkedColumnLength(ordinal);
+    final row = _currentRow!;
+    final offset = row.columnOffsets[ordinal];
+    final payload = row.payload;
+    final oid = _fieldOids?[ordinal] ?? 0;
+    final isText = _fieldIsText?[ordinal] ?? true;
+
+    if (isText ||
+        oid == Oid.text ||
+        oid == Oid.varchar ||
+        oid == Oid.bpchar ||
+        oid == Oid.unknown) {
+      return _decodeText(payload, offset, length);
+    }
+
+    final value = _getValue(ordinal);
+    if (value is String) return value;
+    return value.toString();
+  }
+
+  @override
+  double getDouble(int ordinal) {
+    final length = _checkedColumnLength(ordinal);
+    final row = _currentRow!;
+    final offset = row.columnOffsets[ordinal];
+    final payload = row.payload;
+    final oid = _fieldOids?[ordinal] ?? 0;
+    final isText = _fieldIsText?[ordinal] ?? true;
+
+    if (isText) {
+      return double.parse(_decodeText(payload, offset, length));
+    }
+    if (oid == Oid.float4 && length == 4) {
+      return ByteData.view(payload.buffer, payload.offsetInBytes + offset, 4)
+          .getFloat32(0);
+    }
+    if (oid == Oid.float8 && length == 8) {
+      return ByteData.view(payload.buffer, payload.offsetInBytes + offset, 8)
+          .getFloat64(0);
+    }
+    if (oid == Oid.numeric && length >= 8) {
+      return _readNumericDouble(payload, offset, length);
+    }
+
+    final value = _getValue(ordinal);
+    if (value is double) return value;
+    if (value is int) return value.toDouble();
+    throw StateError('Column $ordinal is not a double');
+  }
+
+  @override
+  bool getBool(int ordinal) {
+    final length = _checkedColumnLength(ordinal);
+    final row = _currentRow!;
+    final offset = row.columnOffsets[ordinal];
+    final payload = row.payload;
+    final isText = _fieldIsText?[ordinal] ?? true;
+
+    if (!isText) {
+      return length > 0 && payload[offset] != 0;
+    }
+    if (length == 1) {
+      final b = payload[offset];
+      return b == 116 || b == 49; // 't' or '1'
+    }
+    final value = _decodeText(payload, offset, length);
+    return value == 'true' || value == '1';
+  }
+
+  @override
+  DateTime getDateTime(int ordinal) {
+    final length = _checkedColumnLength(ordinal);
+    final row = _currentRow!;
+    final offset = row.columnOffsets[ordinal];
+    final payload = row.payload;
+    final oid = _fieldOids?[ordinal] ?? 0;
+    final isText = _fieldIsText?[ordinal] ?? true;
+
+    if (isText) {
+      final value = _decodeText(payload, offset, length);
+      if (oid == Oid.timestamptz) {
+        final decoded = TimezoneHelper.decodeTimestampTzText(
+          value,
+          timeZone: _connector.timeZone,
+        );
+        if (decoded == null) {
+          throw StateError('Column $ordinal is infinity');
+        }
+        return decoded;
+      }
+      if (oid == Oid.date) {
+        final decoded = TimezoneHelper.decodeDateText(
+          value,
+          timeZone: _connector.timeZone,
+        );
+        if (decoded == null) {
+          throw StateError('Column $ordinal is infinity');
+        }
+        return decoded;
+      }
+      final decoded = TimezoneHelper.decodeTimestampText(
+        value,
+        timeZone: _connector.timeZone,
+      );
+      if (decoded == null) {
+        throw StateError('Column $ordinal is infinity');
+      }
+      return decoded;
+    }
+    if (oid == Oid.timestamp && length == 8) {
+      final decoded = TimezoneHelper.decodeTimestamp(
+        _readInt64(payload, offset),
+        timeZone: _connector.timeZone,
+      );
+      if (decoded == null) {
+        throw StateError('Column $ordinal is infinity');
+      }
+      return decoded;
+    }
+    if (oid == Oid.timestamptz && length == 8) {
+      final decoded = TimezoneHelper.decodeTimestampTz(
+        _readInt64(payload, offset),
+        timeZone: _connector.timeZone,
+      );
+      if (decoded == null) {
+        throw StateError('Column $ordinal is infinity');
+      }
+      return decoded;
+    }
+
+    final value = _getValue(ordinal);
+    if (value is DateTime) return value;
+    throw StateError('Column $ordinal is not a DateTime');
   }
 
   Object? _tryReadFast(
@@ -408,6 +603,21 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
         case Oid.float4:
         case Oid.float8:
           return double.parse(_decodeText(payload, offset, length));
+        case Oid.date:
+          return TimezoneHelper.decodeDateText(
+            _decodeText(payload, offset, length),
+            timeZone: _connector.timeZone,
+          );
+        case Oid.timestamp:
+          return TimezoneHelper.decodeTimestampText(
+            _decodeText(payload, offset, length),
+            timeZone: _connector.timeZone,
+          );
+        case Oid.timestamptz:
+          return TimezoneHelper.decodeTimestampTzText(
+            _decodeText(payload, offset, length),
+            timeZone: _connector.timeZone,
+          );
       }
       return _notDecoded;
     }
@@ -444,16 +654,27 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
         }
         return _notDecoded;
       case Oid.timestamp:
-      case Oid.timestamptz:
         if (length == 8) {
-          return _timestampEpoch.add(Duration(
-            microseconds: _readInt64(payload, offset),
-          ));
+          return TimezoneHelper.decodeTimestamp(
+            _readInt64(payload, offset),
+            timeZone: _connector.timeZone,
+          );
         }
         return _notDecoded;
-      case Oid.numeric:
-        if (length >= 8) {
-          return _readNumeric(payload, offset, length);
+      case Oid.timestamptz:
+        if (length == 8) {
+          return TimezoneHelper.decodeTimestampTz(
+            _readInt64(payload, offset),
+            timeZone: _connector.timeZone,
+          );
+        }
+        return _notDecoded;
+      case Oid.date:
+        if (length == 4) {
+          return TimezoneHelper.decodeDate(
+            _readInt32(payload, offset),
+            timeZone: _connector.timeZone,
+          );
         }
         return _notDecoded;
     }
@@ -461,8 +682,62 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     return _notDecoded;
   }
 
+  double _readNumericDouble(Uint8List payload, int offset, int length) {
+    final end = offset + length;
+    if (offset + 8 > end) {
+      throw FormatException('Invalid numeric length: $length');
+    }
+
+    final ndigits = _readInt16(payload, offset);
+    offset += 2;
+    final weight = _readInt16(payload, offset);
+    offset += 2;
+    final sign = _readInt16(payload, offset);
+    offset += 2;
+    offset += 2; // dscale
+
+    if (sign == 0xC000) {
+      return double.nan;
+    }
+    if (ndigits == 0) {
+      return sign == 0x4000 ? -0.0 : 0.0;
+    }
+
+    var value = 0.0;
+    for (var i = 0; i < ndigits; i++) {
+      if (offset + 2 > end) {
+        throw FormatException('Invalid numeric digit length: $length');
+      }
+      value = (value * 10000) + _readInt16(payload, offset);
+      offset += 2;
+    }
+
+    var scaleGroups = ndigits - weight - 1;
+    while (scaleGroups > 0) {
+      value /= 10000;
+      scaleGroups--;
+    }
+    while (scaleGroups < 0) {
+      value *= 10000;
+      scaleGroups++;
+    }
+
+    return sign == 0x4000 ? -value : value;
+  }
+
   String _decodeText(Uint8List payload, int offset, int length) {
     if (identical(_connector.encoding, utf8)) {
+      final end = offset + length;
+      var asciiOnly = true;
+      for (var i = offset; i < end; i++) {
+        if (payload[i] >= 0x80) {
+          asciiOnly = false;
+          break;
+        }
+      }
+      if (asciiOnly) {
+        return String.fromCharCodes(payload, offset, end);
+      }
       return utf8.decoder.convert(payload, offset, offset + length);
     }
     return _connector.encoding
@@ -495,41 +770,191 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     return (high << 32) | low;
   }
 
-  DpgsqlDecimal _readNumeric(Uint8List payload, int offset, int length) {
-    final end = offset + length;
-    if (offset + 8 > end) {
-      throw FormatException('Invalid numeric length: $length');
+  @override
+  dynamic getValue(int ordinal) => _getValue(ordinal);
+
+  @override
+  Map<String, dynamic> toMap() {
+    if (_currentRow == null) {
+      throw StateError('No current row. Call read() first.');
+    }
+    final fields = _rowDescription?.fields;
+    if (fields == null) {
+      throw StateError('No resultset available');
     }
 
-    final ndigits = _readInt16(payload, offset);
-    offset += 2;
-    final weight = _readInt16(payload, offset);
-    offset += 2;
-    final sign = _readInt16(payload, offset);
-    offset += 2;
-    final dscale = _readInt16(payload, offset);
-    offset += 2;
+    final map = <String, dynamic>{};
+    for (var i = 0; i < fields.length; i++) {
+      map[fields[i].name] = _getValue(i);
+    }
+    return map;
+  }
 
-    final digits = List<int>.filled(ndigits, 0);
-    for (var i = 0; i < ndigits; i++) {
-      if (offset + 2 > end) {
-        throw FormatException('Invalid numeric digit length: $length');
+  Future<List<List<Object?>>> readAllRows() async {
+    final rows = <List<Object?>>[];
+    if (_closed || _currentResultFinished) {
+      return rows;
+    }
+
+    while (true) {
+      final msg = await _getNextMessage();
+
+      if (msg == null) {
+        _currentRow = null;
+        _currentRowValues = null;
+        _currentResultFinished = true;
+        _closed = true;
+        return rows;
       }
-      digits[i] = _readInt16(payload, offset);
-      offset += 2;
+
+      if (msg is DataRowMessage) {
+        rows.add(_decodeRowValues(msg));
+        continue;
+      }
+
+      if (msg is RowDescriptionMessage) {
+        _setRowDescription(msg);
+        continue;
+      }
+
+      if (msg is NoDataMessage ||
+          msg is ParseCompleteMessage ||
+          msg is BindCompleteMessage ||
+          msg is CloseCompletedMessage ||
+          msg is ParameterDescriptionMessage) {
+        continue;
+      }
+
+      if (msg is CommandCompleteMessage) {
+        _handleCommandComplete(msg);
+        _currentResultFinished = true;
+        continue;
+      }
+
+      if (msg is ReadyForQueryMessage) {
+        _currentRow = null;
+        _currentRowValues = null;
+        _closed = true;
+        _drained = true;
+        _currentResultFinished = true;
+        return rows;
+      }
+
+      if (msg is ErrorResponseMessage) {
+        _handleError(msg);
+      }
+    }
+  }
+
+  List<Object?> _decodeRowValues(DataRowMessage row) {
+    final values = List<Object?>.filled(row.columnCount, null);
+    for (var i = 0; i < row.columnCount; i++) {
+      values[i] = _decodeRowValue(row, i);
     }
 
-    return DpgsqlDecimal(
-      ndigits: ndigits,
-      weight: weight,
-      sign: sign,
-      dscale: dscale,
-      digits: digits,
-    );
+    return values;
   }
 
   @override
-  dynamic getValue(int ordinal) => _getValue(ordinal);
+  Future<List<Map<String, dynamic>>> readAllMaps() async {
+    final rows = <Map<String, dynamic>>[];
+    if (_closed || _currentResultFinished) {
+      return rows;
+    }
+
+    while (true) {
+      final msg = await _getNextMessage();
+
+      if (msg == null) {
+        _currentRow = null;
+        _currentRowValues = null;
+        _currentResultFinished = true;
+        _closed = true;
+        return rows;
+      }
+
+      if (msg is DataRowMessage) {
+        rows.add(_decodeRowMap(msg));
+        continue;
+      }
+
+      if (msg is RowDescriptionMessage) {
+        _setRowDescription(msg);
+        continue;
+      }
+
+      if (msg is NoDataMessage ||
+          msg is ParseCompleteMessage ||
+          msg is BindCompleteMessage ||
+          msg is CloseCompletedMessage ||
+          msg is ParameterDescriptionMessage) {
+        continue;
+      }
+
+      if (msg is CommandCompleteMessage) {
+        _handleCommandComplete(msg);
+        _currentResultFinished = true;
+        continue;
+      }
+
+      if (msg is ReadyForQueryMessage) {
+        _currentRow = null;
+        _currentRowValues = null;
+        _closed = true;
+        _drained = true;
+        _currentResultFinished = true;
+        return rows;
+      }
+
+      if (msg is ErrorResponseMessage) {
+        _handleError(msg);
+      }
+    }
+  }
+
+  Map<String, dynamic> _decodeRowMap(DataRowMessage row) {
+    final fields = _rowDescription?.fields;
+    if (fields == null) {
+      throw StateError('No resultset available');
+    }
+
+    final map = <String, dynamic>{};
+    for (var i = 0; i < fields.length; i++) {
+      map[fields[i].name] = _decodeRowValue(row, i);
+    }
+    return map;
+  }
+
+  Object? _decodeRowValue(DataRowMessage row, int index) {
+    final length = row.columnLengths[index];
+    if (length == -1) {
+      return null;
+    }
+
+    final offset = row.columnOffsets[index];
+    final payload = row.payload;
+
+    if (_resultMode == PgResultMode.rawText) {
+      return _decodeText(payload, offset, length);
+    }
+
+    final oid = _fieldOids?[index] ?? 0;
+    final isText = _fieldIsText?[index] ?? true;
+
+    final fastValue = _tryReadFast(payload, offset, length, oid, isText);
+    if (!identical(fastValue, _notDecoded)) {
+      return fastValue;
+    }
+
+    final handler = _fieldHandlers?[index];
+    if (!isText && oid == Oid.numeric && handler is TypeHandler<double>) {
+      return _readNumericDouble(payload, offset, length);
+    }
+
+    final colData = Uint8List.sublistView(payload, offset, offset + length);
+    return handler?.read(colData, isText: isText) ??
+        (isText ? utf8.decode(colData) : colData);
+  }
 
   @override
   Future<bool> nextResult() async {
@@ -628,7 +1053,14 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
 
       if (msg is DataRowMessage) {
         _currentRow = msg;
-        _currentRowValues = null;
+        final cache = _currentRowValues;
+        if (cache != null) {
+          if (cache.length == msg.columnCount) {
+            cache.fillRange(0, cache.length, _notDecoded);
+          } else {
+            _currentRowValues = null;
+          }
+        }
         return true;
       }
 

@@ -197,3 +197,58 @@ class DpgsqlDecimalHandler extends TypeHandler<DpgsqlDecimal> {
     return bd.buffer.asUint8List();
   }
 }
+
+class NumericDoubleHandler extends TypeHandler<double> {
+  const NumericDoubleHandler();
+
+  @override
+  int get oid => Oid.numeric;
+
+  @override
+  double read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      return double.parse(encoding.decode(buffer));
+    }
+
+    final bd = ByteData.sublistView(buffer);
+    var offset = 0;
+    final ndigits = bd.getInt16(offset);
+    offset += 2;
+    final weight = bd.getInt16(offset);
+    offset += 2;
+    final sign = bd.getInt16(offset);
+    offset += 2;
+    offset += 2; // dscale
+
+    if (sign == 0xC000) {
+      return double.nan;
+    }
+    if (ndigits == 0) {
+      return sign == 0x4000 ? -0.0 : 0.0;
+    }
+
+    var value = 0.0;
+    for (var i = 0; i < ndigits; i++) {
+      value = (value * 10000) + bd.getInt16(offset);
+      offset += 2;
+    }
+
+    var scaleGroups = ndigits - weight - 1;
+    while (scaleGroups > 0) {
+      value /= 10000;
+      scaleGroups--;
+    }
+    while (scaleGroups < 0) {
+      value *= 10000;
+      scaleGroups++;
+    }
+
+    return sign == 0x4000 ? -value : value;
+  }
+
+  @override
+  Uint8List write(double value, {Encoding encoding = utf8}) {
+    return const DpgsqlDecimalHandler().write(DpgsqlDecimal.parse('$value'));
+  }
+}

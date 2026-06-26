@@ -32,6 +32,7 @@ class DpgsqlReplicationConnection {
       trustServerCertificate: builder.trustServerCertificate,
       encoding: builder.encoding,
       clientEncoding: builder.postgresClientEncoding,
+      timeZone: builder.timeZone,
       replication: true,
       // Helper to indicate replication?
       // For now, let's assume we can modify DpgsqlConnector to accept extra startup params

@@ -29,7 +29,9 @@ class PostgresMessageReader {
 
   /// Lê a próxima mensagem (1 byte de tipo + int32 de tamanho + corpo).
   Future<PostgresMessage> readMessage() async {
-    await _input.ensureBytes(5);
+    if (_input.availableBytes < 5) {
+      await _input.ensureBytes(5);
+    }
     final typeCode = _input.readUint8();
     final length = _input.readInt32();
     if (length < 4) {
@@ -37,7 +39,9 @@ class PostgresMessageReader {
     }
 
     final bodyLength = length - 4;
-    await _input.ensureBytes(bodyLength);
+    if (_input.availableBytes < bodyLength) {
+      await _input.ensureBytes(bodyLength);
+    }
     final rawPayload = _input.readBytes(bodyLength);
     final payload =
         (rawPayload is Uint8List) ? rawPayload : Uint8List.fromList(rawPayload);

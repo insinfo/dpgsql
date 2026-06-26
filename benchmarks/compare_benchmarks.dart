@@ -33,6 +33,24 @@ void main(List<String> args) {
   stdout.writeln();
   stdout.writeln(_resultSetTable(
     benchmarks,
+    title: 'Result set maps (ORM-style Map<String, dynamic>)',
+    resultSetKey: 'result_sets_maps',
+  ));
+  stdout.writeln();
+  stdout.writeln(_resultSetTable(
+    benchmarks,
+    title: 'Result set maps rawText (PHP-style String/null)',
+    resultSetKey: 'result_sets_maps_raw_text',
+  ));
+  stdout.writeln();
+  stdout.writeln(_resultSetTable(
+    benchmarks,
+    title: 'Application typed class + JSON serialization',
+    resultSetKey: 'application_typed_json',
+  ));
+  stdout.writeln();
+  stdout.writeln(_resultSetTable(
+    benchmarks,
     title: 'Result set full (id/name/numeric/timestamp/payload)',
     resultSetKey: 'result_sets',
   ));

@@ -119,6 +119,29 @@ function ensure_benchmark_rows($connection, int $targetRows, string $tableName):
     }
 }
 
+final class BenchmarkTypedRow implements JsonSerializable
+{
+    public function __construct(
+        public int $id,
+        public string $name,
+        public float $amount,
+        public DateTimeImmutable $createdAt,
+        public string $payload
+    ) {
+    }
+
+    public function jsonSerialize(): array
+    {
+        return [
+            'id' => $this->id,
+            'name' => $this->name,
+            'amount' => $this->amount,
+            'created_at' => $this->createdAt->format('Y-m-d H:i:s'),
+            'payload' => $this->payload,
+        ];
+    }
+}
+
 function benchmark_result_set(
     $connection,
     string $tableName,
@@ -244,6 +267,77 @@ function benchmark_result_set_simple(
     ];
 }
 
+function benchmark_result_set_maps(
+    $connection,
+    string $tableName,
+    int $size,
+    int $warmupIterations,
+    int $iterations
+): array {
+    return benchmark_result_set(
+        $connection,
+        $tableName,
+        $size,
+        $warmupIterations,
+        $iterations
+    );
+}
+
+function benchmark_application_typed_json(
+    $connection,
+    string $tableName,
+    int $size,
+    int $warmupIterations,
+    int $iterations
+): array {
+    $query = "SELECT id, name, amount, created_at, payload FROM $tableName ORDER BY id LIMIT $size";
+    $checksum = 0;
+
+    for ($i = 0; $i < $warmupIterations; $i++) {
+        foreach ($connection->query($query) as $row) {
+            $typed = new BenchmarkTypedRow(
+                (int)$row['id'],
+                (string)$row['name'],
+                (float)$row['amount'],
+                new DateTimeImmutable((string)$row['created_at']),
+                (string)$row['payload']
+            );
+            $json = json_encode($typed, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $checksum += $typed->id + strlen($json);
+        }
+    }
+
+    $rowCount = 0;
+    $start = hrtime(true);
+    for ($i = 0; $i < $iterations; $i++) {
+        foreach ($connection->query($query) as $row) {
+            $typed = new BenchmarkTypedRow(
+                (int)$row['id'],
+                (string)$row['name'],
+                (float)$row['amount'],
+                new DateTimeImmutable((string)$row['created_at']),
+                (string)$row['payload']
+            );
+            $json = json_encode($typed, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $checksum += $typed->id + strlen($json);
+            $rowCount++;
+        }
+    }
+    $elapsedNs = hrtime(true) - $start;
+    $elapsedSeconds = $elapsedNs / 1000000000;
+
+    return [
+        'rows_per_query' => $size,
+        'iterations' => $iterations,
+        'warmup_iterations' => $warmupIterations,
+        'total_ms' => $elapsedNs / 1000000,
+        'avg_ms' => ($elapsedNs / 1000000) / $iterations,
+        'queries_per_sec' => $iterations / $elapsedSeconds,
+        'rows_per_sec' => $rowCount / $elapsedSeconds,
+        'checksum' => $checksum,
+    ];
+}
+
 $host = env_or_default('PGHOST', env_or_default('POSTGRES_HOST', '127.0.0.1'));
 $port = env_int('PGPORT', env_int('POSTGRES_PORT', 5432));
 $user = env_or_default('PGUSER', env_or_default('POSTGRES_USER', 'dart'));
@@ -258,7 +352,7 @@ $resultSetIterations = env_int('BENCH_RESULTSET_ITERATIONS', 20);
 $resultSetWarmupIterations = env_int('BENCH_RESULTSET_WARMUP_ITERATIONS', 5);
 $resultSetSizes = array_values(array_filter(array_map(
     fn($value) => (int)trim($value),
-    explode(',', env_or_default('BENCH_RESULTSET_SIZES', '10,1000,10000'))
+    explode(',', env_or_default('BENCH_RESULTSET_SIZES', '10,1000,3000,10000'))
 ), fn($value) => $value > 0));
 
 $config = amp_config($host, $port, $user, $password, $database, $secure);
@@ -332,6 +426,8 @@ $preparedElapsedNs = hrtime(true) - $preparedStart;
 $resultSets = [];
 $resultSetsDrain = [];
 $resultSetsSimple = [];
+$resultSetsMaps = [];
+$applicationTypedJson = [];
 foreach ($resultSetSizes as $size) {
     $resultSetsDrain["rows_$size"] = benchmark_result_set_drain(
         $connection,
@@ -341,6 +437,20 @@ foreach ($resultSetSizes as $size) {
         $resultSetIterations
     );
     $resultSetsSimple["rows_$size"] = benchmark_result_set_simple(
+        $connection,
+        $benchTable,
+        $size,
+        $resultSetWarmupIterations,
+        $resultSetIterations
+    );
+    $resultSetsMaps["rows_$size"] = benchmark_result_set_maps(
+        $connection,
+        $benchTable,
+        $size,
+        $resultSetWarmupIterations,
+        $resultSetIterations
+    );
+    $applicationTypedJson["rows_$size"] = benchmark_application_typed_json(
         $connection,
         $benchTable,
         $size,
@@ -391,5 +501,7 @@ echo json_encode([
     'prepared_checksum' => $preparedChecksum,
     'result_sets_drain' => $resultSetsDrain,
     'result_sets_simple' => $resultSetsSimple,
+    'result_sets_maps' => $resultSetsMaps,
+    'application_typed_json' => $applicationTypedJson,
     'result_sets' => $resultSets,
 ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), PHP_EOL;

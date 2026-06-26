@@ -12,6 +12,7 @@ param(
   [int]$ResultSetIterations = $(if ($env:BENCH_RESULTSET_ITERATIONS) { [int]$env:BENCH_RESULTSET_ITERATIONS } else { 20 }),
   [int]$WarmupIterations = $(if ($env:BENCH_WARMUP_ITERATIONS) { [int]$env:BENCH_WARMUP_ITERATIONS } else { 200 }),
   [int]$ResultSetWarmupIterations = $(if ($env:BENCH_RESULTSET_WARMUP_ITERATIONS) { [int]$env:BENCH_RESULTSET_WARMUP_ITERATIONS } else { 5 }),
+  [string]$ResultSetSizes = $(if ($env:BENCH_RESULTSET_SIZES) { $env:BENCH_RESULTSET_SIZES } else { "10,1000,3000,10000" }),
   [int]$TimeoutSeconds = $(if ($env:BENCH_TIMEOUT_SECONDS) { [int]$env:BENCH_TIMEOUT_SECONDS } else { 120 }),
   [switch]$SkipComposerInstall,
   [switch]$SkipDartCompile
@@ -22,8 +23,10 @@ $ErrorActionPreference = "Stop"
 $root = Resolve-Path (Join-Path $PSScriptRoot "..")
 $resultsDir = Join-Path $root "benchmarks\reports\driver-comparison"
 $binDir = Join-Path $root "benchmarks\bin"
+$dartBenchmarkDir = Join-Path $root "benchmarks"
 $phpBenchmarkDir = Join-Path $root "benchmarks\php_benchmark"
 $dartAotExe = Join-Path $binDir "benchmark_dpgsql.exe"
+$dartPackagesAotExe = Join-Path $binDir "benchmark_dart_packages.exe"
 
 function Convert-BenchBool([string]$value) {
   switch ($value.Trim().ToLowerInvariant()) {
@@ -66,13 +69,42 @@ if (-not $SkipComposerInstall) {
 }
 
 if (-not $SkipDartCompile) {
+  Write-Host "Installing Dart benchmark dependencies..."
+  Push-Location $dartBenchmarkDir
+  try {
+    timeout-cli.exe $TimeoutSeconds dart pub get
+    if ($LASTEXITCODE -ne 0) {
+      throw "dart pub get for benchmarks exited with code $LASTEXITCODE"
+    }
+  } finally {
+    Pop-Location
+  }
+
   Write-Host "Compiling dpgsql benchmark to AOT..."
-  timeout-cli.exe $TimeoutSeconds dart compile exe (Join-Path $root "benchmarks\benchmark_dpgsql.dart") -o $dartAotExe
-  if ($LASTEXITCODE -ne 0) {
-    throw "dart compile exe exited with code $LASTEXITCODE"
+  Push-Location $dartBenchmarkDir
+  try {
+    timeout-cli.exe $TimeoutSeconds dart compile exe "benchmark_dpgsql.dart" -o $dartAotExe
+    if ($LASTEXITCODE -ne 0) {
+      throw "dart compile exe exited with code $LASTEXITCODE"
+    }
+  } finally {
+    Pop-Location
+  }
+
+  Write-Host "Compiling Dart package-driver benchmark to AOT..."
+  Push-Location $dartBenchmarkDir
+  try {
+    timeout-cli.exe $TimeoutSeconds dart compile exe "benchmark_dart_packages.dart" -o $dartPackagesAotExe
+    if ($LASTEXITCODE -ne 0) {
+      throw "dart compile exe for package drivers exited with code $LASTEXITCODE"
+    }
+  } finally {
+    Pop-Location
   }
 } elseif (-not (Test-Path $dartAotExe)) {
   throw "Dart AOT executable not found: $dartAotExe"
+} elseif (-not (Test-Path $dartPackagesAotExe)) {
+  throw "Dart package-driver AOT executable not found: $dartPackagesAotExe"
 }
 
 function Set-BenchEnv([string]$driverName, [string]$benchTable) {
@@ -94,6 +126,7 @@ function Set-BenchEnv([string]$driverName, [string]$benchTable) {
   $env:BENCH_RESULTSET_ITERATIONS = "$ResultSetIterations"
   $env:BENCH_WARMUP_ITERATIONS = "$WarmupIterations"
   $env:BENCH_RESULTSET_WARMUP_ITERATIONS = "$ResultSetWarmupIterations"
+  $env:BENCH_RESULTSET_SIZES = $ResultSetSizes
 }
 
 function Run-And-Capture([string]$name, [scriptblock]$command) {
@@ -127,6 +160,16 @@ Run-And-Capture "dpgsql_aot" {
   timeout-cli.exe $TimeoutSeconds $dartAotExe
 }
 
+Set-BenchEnv "postgres_fork" "bench_rows_postgres_fork"
+Run-And-Capture "postgres_fork" {
+  timeout-cli.exe $TimeoutSeconds $dartPackagesAotExe
+}
+
+Set-BenchEnv "postgres_3" "bench_rows_postgres_3"
+Run-And-Capture "postgres_3" {
+  timeout-cli.exe $TimeoutSeconds $dartPackagesAotExe
+}
+
 Set-BenchEnv "php_pgsql" "bench_rows_php_pgsql"
 Run-And-Capture "php_pgsql" {
   timeout-cli.exe $TimeoutSeconds $PhpPath (Join-Path $root "benchmarks\benchmark_php_pgsql.php")
@@ -149,14 +192,21 @@ Run-And-Capture "php_amphp_postgres" {
 
 $jsonFiles = @(
   (Join-Path $resultsDir "dpgsql_aot.json"),
+  (Join-Path $resultsDir "postgres_fork.json"),
+  (Join-Path $resultsDir "postgres_3.json"),
   (Join-Path $resultsDir "php_pgsql.json"),
   (Join-Path $resultsDir "php_pdo_pgsql.json"),
   (Join-Path $resultsDir "php_pgasync.json"),
   (Join-Path $resultsDir "php_amphp_postgres.json")
 )
 
-dart run (Join-Path $root "benchmarks\compare_benchmarks.dart") @jsonFiles |
-  Set-Content -Path (Join-Path $resultsDir "summary.md") -Encoding UTF8
+Push-Location $dartBenchmarkDir
+try {
+  dart run "compare_benchmarks.dart" @jsonFiles |
+    Set-Content -Path (Join-Path $resultsDir "summary.md") -Encoding UTF8
+} finally {
+  Pop-Location
+}
 
 Write-Host "Results written to $resultsDir"
 Write-Host "Summary: $(Join-Path $resultsDir "summary.md")"

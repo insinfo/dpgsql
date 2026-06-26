@@ -10,6 +10,8 @@ export 'src/postgres_batch_exception.dart';
 export 'src/dpgsql_connection_string_builder.dart';
 export 'src/ssl_mode.dart';
 export 'src/isolation_level.dart';
+export 'src/timezone_settings.dart';
+export 'src/pg_result_mode.dart';
 export 'src/dpgsql_db_type.dart';
 export 'src/dpgsql_connection.dart';
 export 'src/dpgsql_command.dart';
@@ -25,6 +27,7 @@ export 'src/dpgsql_binary_importer.dart';
 export 'src/dpgsql_large_object_manager.dart';
 export 'src/dpgsql_large_object_stream.dart';
 export 'src/internal/pending_command.dart';
+export 'src/data/pg_row.dart';
 
 // Types
 export 'src/types/dpgsql_types.dart';

@@ -128,6 +128,9 @@ class _CopyStreamBinaryInput extends BinaryInput {
   int get _available => _buffer.length - _offset;
 
   @override
+  int get availableBytes => _available;
+
+  @override
   Future<void> ensureBytes(int count) async {
     if (_available >= count) return;
     if (_isDone) throw Exception('End of COPY data');

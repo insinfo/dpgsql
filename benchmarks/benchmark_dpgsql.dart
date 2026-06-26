@@ -22,6 +22,9 @@ Future<void> main() async {
     final resultSets = <String, dynamic>{};
     final resultSetsDrain = <String, dynamic>{};
     final resultSetsSimple = <String, dynamic>{};
+    final resultSetsMaps = <String, dynamic>{};
+    final resultSetsMapsRawText = <String, dynamic>{};
+    final applicationTypedJson = <String, dynamic>{};
 
     for (final size in config.resultSetSizes) {
       resultSetsDrain['rows_$size'] = await _benchmarkResultSetDrain(
@@ -31,6 +34,25 @@ Future<void> main() async {
         config,
       );
       resultSetsSimple['rows_$size'] = await _benchmarkResultSetSimple(
+        connection,
+        config.tableName,
+        size,
+        config,
+      );
+      resultSetsMaps['rows_$size'] = await _benchmarkResultSetMaps(
+        connection,
+        config.tableName,
+        size,
+        config,
+      );
+      resultSetsMapsRawText['rows_$size'] =
+          await _benchmarkResultSetMapsRawText(
+        connection,
+        config.tableName,
+        size,
+        config,
+      );
+      applicationTypedJson['rows_$size'] = await _benchmarkApplicationTypedJson(
         connection,
         config.tableName,
         size,
@@ -72,6 +94,9 @@ Future<void> main() async {
       'prepared_checksum': prepared.checksum,
       'result_sets_drain': resultSetsDrain,
       'result_sets_simple': resultSetsSimple,
+      'result_sets_maps': resultSetsMaps,
+      'result_sets_maps_raw_text': resultSetsMapsRawText,
+      'application_typed_json': applicationTypedJson,
       'result_sets': resultSets,
     }));
   } finally {
@@ -137,24 +162,14 @@ Future<_Metric> _benchmarkParameter(
   DpgsqlConnection connection,
   _BenchConfig config,
 ) async {
-  final parameters = DpgsqlParameterCollection()
-    ..addWithValue('a', 40)
-    ..addWithValue('b', 2);
+  final command = DpgsqlCommand('SELECT @a::int + @b::int', connection);
+  command.parameters.addWithValue('a', 40);
+  command.parameters.addWithValue('b', 2);
 
-  var checksum = await _drainScalarSql(
-    connection,
-    'SELECT @a::int + @b::int',
-    parameters,
-    config.warmupIterations,
-  );
+  var checksum = await _drainScalar(command, config.warmupIterations);
 
   final sw = Stopwatch()..start();
-  checksum += await _drainScalarSql(
-    connection,
-    'SELECT @a::int + @b::int',
-    parameters,
-    config.iterations,
-  );
+  checksum += await _drainScalar(command, config.iterations);
   sw.stop();
 
   return _Metric.fromElapsed(sw.elapsed, config.iterations, checksum);
@@ -270,6 +285,93 @@ Future<Map<String, dynamic>> _benchmarkResultSetSimple(
   );
 }
 
+Future<Map<String, dynamic>> _benchmarkResultSetMaps(
+  DpgsqlConnection connection,
+  String tableName,
+  int rowsPerQuery,
+  _BenchConfig config,
+) async {
+  final command = DpgsqlCommand(
+    'SELECT id, name, amount, created_at, payload '
+    'FROM $tableName ORDER BY id LIMIT $rowsPerQuery',
+    connection,
+  );
+  await command.prepare();
+
+  var checksum = await _drainMaps(command, config.resultSetWarmupIterations);
+
+  final sw = Stopwatch()..start();
+  checksum += await _drainMaps(command, config.resultSetIterations);
+  sw.stop();
+
+  return _resultSetMetric(
+    elapsed: sw.elapsed,
+    rowsPerQuery: rowsPerQuery,
+    iterations: config.resultSetIterations,
+    warmupIterations: config.resultSetWarmupIterations,
+    checksum: checksum,
+  );
+}
+
+Future<Map<String, dynamic>> _benchmarkResultSetMapsRawText(
+  DpgsqlConnection connection,
+  String tableName,
+  int rowsPerQuery,
+  _BenchConfig config,
+) async {
+  final command = DpgsqlCommand(
+    'SELECT id, name, amount, created_at, payload '
+    'FROM $tableName ORDER BY id LIMIT $rowsPerQuery',
+    connection,
+  );
+  await command.prepare();
+
+  var checksum =
+      await _drainMapsRawText(command, config.resultSetWarmupIterations);
+
+  final sw = Stopwatch()..start();
+  checksum += await _drainMapsRawText(command, config.resultSetIterations);
+  sw.stop();
+
+  return _resultSetMetric(
+    elapsed: sw.elapsed,
+    rowsPerQuery: rowsPerQuery,
+    iterations: config.resultSetIterations,
+    warmupIterations: config.resultSetWarmupIterations,
+    checksum: checksum,
+  );
+}
+
+Future<Map<String, dynamic>> _benchmarkApplicationTypedJson(
+  DpgsqlConnection connection,
+  String tableName,
+  int rowsPerQuery,
+  _BenchConfig config,
+) async {
+  final command = DpgsqlCommand(
+    'SELECT id, name, amount, created_at, payload '
+    'FROM $tableName ORDER BY id LIMIT $rowsPerQuery',
+    connection,
+  );
+  await command.prepare();
+
+  var checksum = await _drainApplicationTypedJson(
+      command, config.resultSetWarmupIterations);
+
+  final sw = Stopwatch()..start();
+  checksum +=
+      await _drainApplicationTypedJson(command, config.resultSetIterations);
+  sw.stop();
+
+  return _resultSetMetric(
+    elapsed: sw.elapsed,
+    rowsPerQuery: rowsPerQuery,
+    iterations: config.resultSetIterations,
+    warmupIterations: config.resultSetWarmupIterations,
+    checksum: checksum,
+  );
+}
+
 Map<String, dynamic> _resultSetMetric({
   required Duration elapsed,
   required int rowsPerQuery,
@@ -299,27 +401,7 @@ Future<int> _drainScalar(DpgsqlCommand command, int iterations) async {
     final reader = await command.executeReader();
     try {
       if (await reader.read()) {
-        checksum += reader.getValue(0) as int;
-      }
-    } finally {
-      await reader.close();
-    }
-  }
-  return checksum;
-}
-
-Future<int> _drainScalarSql(
-  DpgsqlConnection connection,
-  String sql,
-  DpgsqlParameterCollection parameters,
-  int iterations,
-) async {
-  var checksum = 0;
-  for (var i = 0; i < iterations; i++) {
-    final reader = await connection.executeReader(sql, parameters: parameters);
-    try {
-      if (await reader.read()) {
-        checksum += reader.getValue(0) as int;
+        checksum += reader.getInt(0);
       }
     } finally {
       await reader.close();
@@ -331,18 +413,13 @@ Future<int> _drainScalarSql(
 Future<int> _drainRows(DpgsqlCommand command, int iterations) async {
   var checksum = 0;
   for (var i = 0; i < iterations; i++) {
-    final reader = await command.executeReader();
-    try {
-      while (await reader.read()) {
-        checksum += (reader.getValue(0) as int) +
-            reader.getValue(1).toString().length +
-            reader.getValue(2).toString().length +
-            reader.getValue(3).toString().length +
-            reader.getValue(4).toString().length;
-      }
-    } finally {
-      await reader.close();
-    }
+    await command.forEachPgRowSync((row) {
+      checksum += row.getInt(0)! +
+          row.columnLengths[1] +
+          row.getNumericDouble(2)!.toString().length +
+          row.getDateTime(3)!.toString().length +
+          row.columnLengths[4];
+    });
   }
   return checksum;
 }
@@ -365,16 +442,60 @@ Future<int> _drainRowsOnly(DpgsqlCommand command, int iterations) async {
 Future<int> _drainRowsSimple(DpgsqlCommand command, int iterations) async {
   var checksum = 0;
   for (var i = 0; i < iterations; i++) {
-    final reader = await command.executeReader();
-    try {
-      while (await reader.read()) {
-        checksum += (reader.getValue(0) as int) +
-            reader.getValue(1).toString().length +
-            reader.getValue(2).toString().length;
-      }
-    } finally {
-      await reader.close();
+    await command.forEachPgRowSync((row) {
+      checksum += row.getInt(0)! + row.columnLengths[1] + row.columnLengths[2];
+    });
+  }
+  return checksum;
+}
+
+Future<int> _drainMaps(DpgsqlCommand command, int iterations) async {
+  var checksum = 0;
+  for (var i = 0; i < iterations; i++) {
+    final rows = await command.executeMaps();
+    for (final row in rows) {
+      checksum += (row['id'] as int) +
+          row['name'].toString().length +
+          row['amount'].toString().length +
+          row['created_at'].toString().length +
+          row['payload'].toString().length;
     }
+  }
+  return checksum;
+}
+
+Future<int> _drainMapsRawText(DpgsqlCommand command, int iterations) async {
+  var checksum = 0;
+  for (var i = 0; i < iterations; i++) {
+    final rows = await command.executeMaps(resultMode: PgResultMode.rawText);
+    for (final row in rows) {
+      checksum += int.parse(row['id'] as String) +
+          (row['name'] as String).length +
+          (row['amount'] as String).length +
+          (row['created_at'] as String).length +
+          (row['payload'] as String).length;
+    }
+  }
+  return checksum;
+}
+
+Future<int> _drainApplicationTypedJson(
+  DpgsqlCommand command,
+  int iterations,
+) async {
+  var checksum = 0;
+  for (var i = 0; i < iterations; i++) {
+    await command.forEachPgRowSync((row) {
+      final typed = _BenchmarkTypedRow(
+        id: row.getInt(0)!,
+        name: row.getString(1)!,
+        amount: row.getNumericDouble(2)!,
+        createdAt: row.getDateTime(3)!,
+        payload: row.getString(4)!,
+      );
+      final json = jsonEncode(typed);
+      checksum += typed.id + json.length;
+    });
   }
   return checksum;
 }
@@ -401,7 +522,7 @@ CREATE TABLE IF NOT EXISTS $tableName (
   var existingRows = 0;
   try {
     if (await countReader.read()) {
-      existingRows = countReader.getValue(0) as int;
+      existingRows = countReader.getInt(0);
     }
   } finally {
     await countReader.close();
@@ -438,6 +559,40 @@ CREATE TABLE IF NOT EXISTS $tableName (
   }
 }
 
+final class _BenchmarkTypedRow {
+  const _BenchmarkTypedRow({
+    required this.id,
+    required this.name,
+    required this.amount,
+    required this.createdAt,
+    required this.payload,
+  });
+
+  final int id;
+  final String name;
+  final double amount;
+  final DateTime createdAt;
+  final String payload;
+
+  Map<String, Object?> toJson() => {
+        'id': id,
+        'name': name,
+        'amount': amount,
+        'created_at': _formatTimestamp(createdAt),
+        'payload': payload,
+      };
+}
+
+String _formatTimestamp(DateTime value) {
+  final year = value.year.toString().padLeft(4, '0');
+  final month = value.month.toString().padLeft(2, '0');
+  final day = value.day.toString().padLeft(2, '0');
+  final hour = value.hour.toString().padLeft(2, '0');
+  final minute = value.minute.toString().padLeft(2, '0');
+  final second = value.second.toString().padLeft(2, '0');
+  return '$year-$month-$day $hour:$minute:$second';
+}
+
 class _BenchConfig {
   _BenchConfig({
     required this.driverName,
@@ -457,7 +612,7 @@ class _BenchConfig {
   });
 
   factory _BenchConfig.fromEnvironment() {
-    final resultSetSizes = _env('BENCH_RESULTSET_SIZES', '10,1000,10000')
+    final resultSetSizes = _env('BENCH_RESULTSET_SIZES', '10,1000,3000,10000')
         .split(',')
         .map((s) => int.tryParse(s.trim()))
         .whereType<int>()

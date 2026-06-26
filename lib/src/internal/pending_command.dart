@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import '../dpgsql_batch_command.dart';
+import '../pg_result_mode.dart';
 import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
 
@@ -27,6 +28,7 @@ class PendingCommand {
     required this.sql,
     required this.statementName,
     required this.expectedResponseCount,
+    this.resultMode = PgResultMode.typed,
     Completer<void>? completer,
   }) : completer = completer ?? Completer<void>() {
     // Prevent unhandled asynchronous errors if nobody awaits [completed].
@@ -48,6 +50,9 @@ class PendingCommand {
   /// - Execute: variable (DataRow* + CommandComplete)
   /// - Sync: 1 (ReadyForQuery)
   final int expectedResponseCount;
+
+  /// How result values for this command should be exposed to readers.
+  final PgResultMode resultMode;
 
   /// Completer to signal when this command is done.
   final Completer<void> completer;

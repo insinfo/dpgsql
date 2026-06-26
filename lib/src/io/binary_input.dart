@@ -7,6 +7,9 @@ import 'uint8_list_pool.dart';
 /// Leitura binária de alto nível com API síncrona (do ponto de vista do parser),
 /// mas alimentada por IO assíncrono embaixo.
 abstract class BinaryInput {
+  /// Bytes currently available for synchronous reads.
+  int get availableBytes;
+
   /// Garante que pelo menos [count] bytes estarão disponíveis para leitura.
   Future<void> ensureBytes(int count);
 
@@ -61,6 +64,9 @@ class SocketBinaryInput implements BinaryInput {
   Completer<void>? _waitCompleter;
 
   int get _available => _writeLength - _readOffset;
+
+  @override
+  int get availableBytes => _available;
 
   void _onData(List<int> data) {
     _appendData(data);
@@ -250,6 +256,9 @@ class MemoryBinaryInput implements BinaryInput {
   int get offset => _offset;
   int get _available => _buffer.length - _offset;
   int get remaining => _available;
+
+  @override
+  int get availableBytes => _available;
 
   @override
   Future<void> ensureBytes(int count) async {

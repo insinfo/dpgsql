@@ -12,6 +12,36 @@ abstract class DpgsqlDataReader {
   /// Gets the value of the specified column by ordinal.
   dynamic getValue(int ordinal);
 
+  /// Materializes the current row as a column-name keyed map.
+  ///
+  /// This allocates one map for the current row. Values are decoded with the
+  /// same rules used by [getValue].
+  Map<String, dynamic> toMap();
+
+  /// Reads all remaining rows in the current result set as maps.
+  ///
+  /// This is intended for ORM-style integrations that naturally consume
+  /// `Map<String, dynamic>` rows.
+  Future<List<Map<String, dynamic>>> readAllMaps();
+
+  /// Gets whether the specified column contains a database NULL.
+  bool isDBNull(int ordinal);
+
+  /// Gets the specified column as an int.
+  int getInt(int ordinal);
+
+  /// Gets the specified column as a String.
+  String getString(int ordinal);
+
+  /// Gets the specified column as a double.
+  double getDouble(int ordinal);
+
+  /// Gets the specified column as a bool.
+  bool getBool(int ordinal);
+
+  /// Gets the specified column as a DateTime.
+  DateTime getDateTime(int ordinal);
+
   /// Gets the number of columns in the current row.
   int get fieldCount;
 
