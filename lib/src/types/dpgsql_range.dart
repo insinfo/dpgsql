@@ -32,19 +32,15 @@ class DpgsqlRange<T> {
   String toString() {
     if (isEmpty) return 'empty';
     final sb = StringBuffer();
-    sb.write(lowerBoundInclusive ? '[' : '(');
-    if (lowerBoundInfinite) {
-      sb.write('-infinity'); // Or just omit? Postgres format usually omits.
-    } else {
+    sb.write(lowerBoundInfinite ? '(' : (lowerBoundInclusive ? '[' : '('));
+    if (!lowerBoundInfinite) {
       sb.write(lowerBound);
     }
     sb.write(',');
-    if (upperBoundInfinite) {
-      sb.write('infinity');
-    } else {
+    if (!upperBoundInfinite) {
       sb.write(upperBound);
     }
-    sb.write(upperBoundInclusive ? ']' : ')');
+    sb.write(upperBoundInfinite ? ')' : (upperBoundInclusive ? ']' : ')'));
     return sb.toString();
   }
 

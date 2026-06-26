@@ -652,7 +652,7 @@ class DpgsqlConnector {
                 candidate,
                 paramOids,
               );
-              statementNameToUse = autoPrepareStatement.name;
+              statementNameToUse = autoPrepareStatement?.name;
             }
           }
         }

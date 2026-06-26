@@ -9,7 +9,7 @@ import 'list_range.dart';
 /// the replacementCharacter to `null` to throw an [ArgumentError] rather than
 /// replace the bad value.
 class Utf16CodeUnitDecoder implements Iterator<int> {
-  // TODO(kevmoo): should this field be private?
+  // NOTE(kevmoo): should this field be private?
   final ListRangeIterator utf16CodeUnitIterator;
   final int? replacementCodepoint;
   int? _current;

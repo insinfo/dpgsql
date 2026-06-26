@@ -1,5 +1,18 @@
 # TODO dpgsql
 
+## Progresso 2026-06-26 (publicacao + auto-prepare robusto)
+
+- Criados `CHANGELOG.md` e `LICENSE` com MIT License (`Copyright (c) 2022-2026 Isaque Neves`).
+- Lido `referencias/npgsql/src/Npgsql/PreparedStatementManager.cs` e `referencias/npgsql/test/Npgsql.Tests/AutoPrepareTests.cs` para comparar a politica de substituicao de auto-prepare.
+- Lido `referencias/npgsql/test/Npgsql.Tests/Types/RangeTests.cs` e portado parsing texto de ranges para Dart.
+- `PreparedStatementManager.beginAutoPrepare()` agora faz fallback para execucao sem auto-prepare quando nao existe slot seguro, em vez de lançar `Bad state: No auto-prepare slot is available`.
+- `RangeHandler` agora lê ranges em formato texto (`empty`, inclusivo/exclusivo, limites infinitos e bounds entre aspas), cobrindo Simple Query e formatos emitidos pelo PostgreSQL.
+- `DpgsqlRange.toString()` foi normalizado para o formato PostgreSQL/Npgsql, omitindo limites infinitos.
+- `DpgsqlBinaryExporter` agora rejeita explicitamente flags de cabecalho COPY binary nao suportadas.
+- Comentarios `TODO` herdados de codecs/testes foram convertidos para notas, removendo ruido de diagnostico da IDE.
+- Adicionado teste unitario `prepared_statement_manager_test.dart` cobrindo cache cheio sem slot evictable.
+- `auto_prepare_test.dart` reforcado com substituicoes repetidas usando `Max Auto Prepare=1`.
+
 ## Progresso 2026-06-26 (API Dpgsql + docs + testes reais)
 
 - Renomeada a API publica de `Npgsql*` para `Dpgsql*` no codigo do pacote, testes e benchmarks, incluindo conexao, comandos, data source, parametros, transacoes, batch, tipos, schema e replicacao.

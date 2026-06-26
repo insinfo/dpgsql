@@ -125,7 +125,7 @@ List<int> utf8ToCodepoints(List<int> utf8EncodedBytes,
 ///
 /// Creates decoders on demand and translates bytes only as needed. Results are
 /// not cached.
-// TODO(floitsch): Consider removing the extend and switch to implements since
+// NOTE(floitsch): Consider removing the extend and switch to implements since
 // that's cheaper to allocate.
 class IterableUtf8Decoder extends IterableBase<int> {
   final List<int> bytes;
@@ -150,7 +150,7 @@ class IterableUtf8Decoder extends IterableBase<int> {
 /// [replacementCodepoint] to `null` to throw an [ArgumentError] instead of
 /// replacing invalid sequences. The iterator itself is iterable.
 class Utf8Decoder implements Iterator<int> {
-  // TODO(kevmoo): should this field be private?
+  // NOTE(kevmoo): should this field be private?
   final ListRangeIterator utf8EncodedBytesIterator;
   final int? replacementCodepoint;
   int? _current;

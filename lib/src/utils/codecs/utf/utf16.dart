@@ -181,7 +181,7 @@ typedef _CodeUnitsProvider = ListRangeIterator Function();
 ///
 /// Creates decoders on demand and translates bytes only as needed. Results are
 /// not cached.
-// TODO(floitsch): Consider removing the extend and switch to implements since
+// NOTE(floitsch): Consider removing the extend and switch to implements since
 // that's cheaper to allocate.
 class IterableUtf16Decoder extends IterableBase<int> {
   final _CodeUnitsProvider codeunitsProvider;
@@ -199,7 +199,7 @@ class IterableUtf16Decoder extends IterableBase<int> {
 ///
 /// Uses the BOM to determine endianness and defaults to big-endian.
 abstract class Utf16BytesToCodeUnitsDecoder implements ListRangeIterator {
-  // TODO(kevmoo): should this field be private?
+  // NOTE(kevmoo): should this field be private?
   final ListRangeIterator utf16EncodedBytesIterator;
   final int? replacementCodepoint;
   int? _current;

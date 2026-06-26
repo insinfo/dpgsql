@@ -22,7 +22,7 @@ class Koi8rCodec extends dart_convert.Encoding {
       : const Koi8rDecoder(allowInvalid: false);
 
   @override
-  // TODO: implement encoder
+  // NOTE: implement encoder
   Koi8rEncoder get encoder => allowInvalid
       ? const Koi8rEncoder(allowInvalid: true)
       : const Koi8rEncoder(allowInvalid: false);

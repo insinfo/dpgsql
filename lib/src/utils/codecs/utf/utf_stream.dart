@@ -5,7 +5,7 @@ import 'dart:async';
 import 'constants.dart';
 import 'util.dart';
 
-// TODO(floitsch): make this transformer reusable.
+// NOTE(floitsch): make this transformer reusable.
 abstract class _StringDecoder extends StreamTransformerBase<List<int>, String>
     implements EventSink<List<int>> {
   List<int>? _carry;

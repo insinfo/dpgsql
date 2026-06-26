@@ -263,17 +263,19 @@ class PreparedStatementManager {
 
   /// Marks an auto-prepare candidate as being prepared and assigns a stable
   /// server-side statement name.
-  PreparedStatement beginAutoPrepare(
+  PreparedStatement? beginAutoPrepare(
       PreparedStatement candidate, List<int> parameterOids) {
     if (maxAutoPrepared <= 0) {
-      throw StateError('Auto prepare is disabled');
+      return null;
     }
 
     if (!identical(bySql[candidate.sql], candidate)) {
       bySql[candidate.sql] = candidate;
     }
 
-    _ensureAutoPreparedSlotCapacity(candidate);
+    if (!_ensureAutoPreparedSlotCapacity(candidate)) {
+      return null;
+    }
     candidate.name ??= _generateStatementName();
     candidate.setParamTypes(parameterOids);
     candidate.state = PreparedState.beingPrepared;
@@ -340,11 +342,11 @@ class PreparedStatementManager {
     // Find LRU statement
     PreparedStatement? lruStatement;
     int lruIndex = -1;
-    int oldestTime = DateTime.now().microsecondsSinceEpoch;
+    var oldestTime = 0x7FFFFFFFFFFFFFFF;
 
     for (var i = 0; i < autoPrepared.length; i++) {
       final stmt = autoPrepared[i];
-      if (stmt != null && !stmt.isExplicit && stmt.lastUsed < oldestTime) {
+      if (stmt != null && !stmt.isExplicit && stmt.lastUsed <= oldestTime) {
         oldestTime = stmt.lastUsed;
         lruStatement = stmt;
         lruIndex = i;
@@ -398,37 +400,37 @@ class PreparedStatementManager {
     }
   }
 
-  void _ensureAutoPreparedSlotCapacity(PreparedStatement candidate) {
+  bool _ensureAutoPreparedSlotCapacity(PreparedStatement candidate) {
     if (candidate.autoPreparedSlotIndex >= 0) {
-      return;
+      return true;
     }
 
     for (var i = 0; i < autoPrepared.length; i++) {
       if (autoPrepared[i] == null) {
         autoPrepared[i] = candidate;
         candidate.autoPreparedSlotIndex = i;
-        return;
+        return true;
       }
     }
 
     if (autoPrepared.length < maxAutoPrepared) {
       candidate.autoPreparedSlotIndex = autoPrepared.length;
       autoPrepared.add(candidate);
-      return;
+      return true;
     }
 
     final evicted = evictLRU();
     if (evicted != null) {
       final slot = autoPrepared.indexOf(null);
       if (slot < 0) {
-        throw StateError('No auto-prepare slot is available');
+        return false;
       }
       candidate.autoPreparedSlotIndex = slot;
       autoPrepared[slot] = candidate;
-      return;
+      return true;
     }
 
-    throw StateError('No auto-prepare slot is available');
+    return false;
   }
 
   /// Get current cache size percentage.

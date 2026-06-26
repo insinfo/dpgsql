@@ -31,6 +31,7 @@ export 'src/types/dpgsql_types.dart';
 export 'src/types/dpgsql_geometric.dart';
 export 'src/types/dpgsql_tsvector.dart';
 export 'src/types/dpgsql_tsquery.dart';
+export 'src/types/dpgsql_range.dart';
 
 // Replication
 export 'src/replication/dpgsql_replication_connection.dart';

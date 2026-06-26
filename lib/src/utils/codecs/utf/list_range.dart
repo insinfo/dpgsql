@@ -5,7 +5,7 @@ import 'dart:collection';
 /// Lightweight view over a range within a source list.
 ///
 /// Do not modify the underlying list while iterating; behavior is undefined.
-// TODO(floitsch): Consider removing the extend and switch to implements since
+// NOTE(floitsch): Consider removing the extend and switch to implements since
 // that's cheaper to allocate.
 class ListRange extends IterableBase<int> {
   final List<int> _source;

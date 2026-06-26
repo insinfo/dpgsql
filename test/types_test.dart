@@ -121,6 +121,68 @@ void main() {
       expect(read.lowerBoundInfinite, true);
       expect(read.upperBound, 5);
     });
+
+    test('Int4RangeHandler parses text ranges', () {
+      final handler = RangeHandler<int>(0, const IntegerHandler());
+
+      expect(
+        handler.read(Uint8List.fromList('[1,10)'.codeUnits), isText: true),
+        const DpgsqlRange<int>(lowerBound: 1, upperBound: 10),
+      );
+      expect(
+        handler.read(Uint8List.fromList(' empty '.codeUnits), isText: true),
+        const DpgsqlRange<int>.empty(),
+      );
+      expect(
+        handler
+            .read(Uint8List.fromList('[-infinity,infinity]'.codeUnits),
+                isText: true)
+            .toString(),
+        '(,)',
+      );
+      expect(
+        handler
+            .read(Uint8List.fromList('[,10]'.codeUnits), isText: true)
+            .toString(),
+        '(,10]',
+      );
+      expect(
+        handler
+            .read(Uint8List.fromList('[1,]'.codeUnits), isText: true)
+            .toString(),
+        '[1,)',
+      );
+      expect(
+        handler.read(Uint8List.fromList('(1,1)'.codeUnits), isText: true),
+        const DpgsqlRange<int>.empty(),
+      );
+    });
+
+    test('Text RangeHandler parses quoted and escaped bounds', () {
+      final handler = RangeHandler<String>(0, const TextHandler());
+      final range = handler.read(
+        Uint8List.fromList(r'["a,b","c\"d"]'.codeUnits),
+        isText: true,
+      );
+
+      expect(range.lowerBound, 'a,b');
+      expect(range.upperBound, 'c"d');
+      expect(range.lowerBoundInclusive, isTrue);
+      expect(range.upperBoundInclusive, isTrue);
+    });
+
+    test('RangeHandler rejects malformed text ranges', () {
+      final handler = RangeHandler<int>(0, const IntegerHandler());
+
+      expect(
+        () => handler.read(Uint8List.fromList('(0 1)'.codeUnits), isText: true),
+        throwsFormatException,
+      );
+      expect(
+        () => handler.read(Uint8List.fromList('(0,1'.codeUnits), isText: true),
+        throwsFormatException,
+      );
+    });
   });
 
   group('Text Array Parsing', () {

@@ -49,7 +49,13 @@ class DpgsqlBinaryExporter {
 
     final flags = _input.readInt32();
     if (flags != 0) {
-      // TODO: Handle OID inclusion flag if needed, usually 0 for standard binary
+      throw PostgresException(
+        severity: 'ERROR',
+        invariantSeverity: 'ERROR',
+        sqlState: '0A000',
+        messageText:
+            'Unsupported COPY binary header flags: 0x${flags.toRadixString(16)}',
+      );
     }
 
     final extLength = _input.readInt32();

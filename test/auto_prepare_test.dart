@@ -34,6 +34,18 @@ void main() {
 
       expect(await _preparedStatementCount(conn), equals(1));
       expect(await _singlePreparedStatement(conn), contains('+ 2'));
+
+      expect(
+        await executeScalar(
+          conn,
+          'SELECT @value::int + 3',
+          {'value': 43},
+        ),
+        equals(46),
+      );
+
+      expect(await _preparedStatementCount(conn), equals(1));
+      expect(await _singlePreparedStatement(conn), contains('+ 3'));
     } finally {
       await conn.close();
     }

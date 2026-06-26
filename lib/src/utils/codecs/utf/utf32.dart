@@ -168,7 +168,7 @@ typedef Utf32BytesDecoderProvider = Utf32BytesDecoder Function();
 ///
 /// Creates decoders on demand and translates bytes only as needed. Results are
 /// not cached.
-// TODO(floitsch): Consider removing the extend and switch to implements since
+// NOTE(floitsch): Consider removing the extend and switch to implements since
 // that's cheaper to allocate.
 class IterableUtf32Decoder extends IterableBase<int> {
   final Utf32BytesDecoderProvider codeunitsProvider;
@@ -181,7 +181,7 @@ class IterableUtf32Decoder extends IterableBase<int> {
 
 /// Base class that converts encoded bytes to UTF-32 code points.
 abstract class Utf32BytesDecoder implements ListRangeIterator {
-  // TODO(kevmoo): should this field be private?
+  // NOTE(kevmoo): should this field be private?
   final ListRangeIterator utf32EncodedBytesIterator;
   final int? replacementCodepoint;
   int? _current;

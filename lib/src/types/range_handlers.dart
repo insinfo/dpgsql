@@ -14,8 +14,7 @@ class RangeHandler<T> extends TypeHandler<DpgsqlRange<T>> {
   DpgsqlRange<T> read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      // TODO: Text parsing for ranges
-      throw UnimplementedError('Text parsing for Range not implemented');
+      return _readTextRange(encoding.decode(buffer), encoding);
     }
 
     if (buffer.isEmpty) return DpgsqlRange.empty();
@@ -109,4 +108,151 @@ class RangeHandler<T> extends TypeHandler<DpgsqlRange<T>> {
     }
     return result;
   }
+
+  DpgsqlRange<T> _readTextRange(String input, Encoding encoding) {
+    final text = input.trim();
+    if (text.toLowerCase() == 'empty') {
+      return DpgsqlRange<T>.empty();
+    }
+    if (text.length < 3) {
+      throw FormatException('Invalid range literal: $input');
+    }
+
+    final start = text.codeUnitAt(0);
+    final end = text.codeUnitAt(text.length - 1);
+    if (start != 0x5B && start != 0x28) {
+      throw FormatException('Invalid range lower bound marker: $input');
+    }
+    if (end != 0x5D && end != 0x29) {
+      throw FormatException('Invalid range upper bound marker: $input');
+    }
+
+    final lowerInclusive = start == 0x5B;
+    final upperInclusive = end == 0x5D;
+    final bounds = _splitBounds(text.substring(1, text.length - 1), input);
+
+    final lower = _parseBound(bounds.lower, isLower: true, encoding: encoding);
+    final upper = _parseBound(bounds.upper, isLower: false, encoding: encoding);
+
+    if (!lower.infinite &&
+        !upper.infinite &&
+        lower.value == upper.value &&
+        !(lowerInclusive && upperInclusive)) {
+      return DpgsqlRange<T>.empty();
+    }
+
+    return DpgsqlRange<T>(
+      lowerBound: lower.value,
+      upperBound: upper.value,
+      lowerBoundInclusive: lower.infinite ? false : lowerInclusive,
+      upperBoundInclusive: upper.infinite ? false : upperInclusive,
+      lowerBoundInfinite: lower.infinite,
+      upperBoundInfinite: upper.infinite,
+    );
+  }
+
+  _RangeBounds _splitBounds(String text, String originalInput) {
+    final lower = StringBuffer();
+    final upper = StringBuffer();
+    var current = lower;
+    var inQuotes = false;
+    var lowerQuoted = false;
+    var upperQuoted = false;
+    var foundComma = false;
+
+    for (var i = 0; i < text.length; i++) {
+      final char = text.codeUnitAt(i);
+
+      if (char == 0x5C) {
+        if (i + 1 >= text.length) {
+          current.writeCharCode(char);
+          continue;
+        }
+        current.write(text[i + 1]);
+        i++;
+        continue;
+      }
+
+      if (char == 0x22) {
+        inQuotes = !inQuotes;
+        if (!foundComma) {
+          lowerQuoted = true;
+        } else {
+          upperQuoted = true;
+        }
+        continue;
+      }
+
+      if (char == 0x2C && !inQuotes) {
+        if (foundComma) {
+          throw FormatException('Invalid range literal: $originalInput');
+        }
+        foundComma = true;
+        current = upper;
+        continue;
+      }
+
+      current.writeCharCode(char);
+    }
+
+    if (inQuotes || !foundComma) {
+      throw FormatException('Invalid range literal: $originalInput');
+    }
+
+    return _RangeBounds(
+      _RangeBoundText(lower.toString(), lowerQuoted),
+      _RangeBoundText(upper.toString(), upperQuoted),
+    );
+  }
+
+  _RangeBound<T> _parseBound(
+    _RangeBoundText bound, {
+    required bool isLower,
+    required Encoding encoding,
+  }) {
+    final value = bound.quoted ? bound.text : bound.text.trim();
+    if (!bound.quoted) {
+      final lowerValue = value.toLowerCase();
+      if (value.isEmpty ||
+          lowerValue == 'null' ||
+          (isLower && lowerValue == '-infinity') ||
+          (!isLower && lowerValue == 'infinity')) {
+        return _RangeBound<T>.infinite();
+      }
+    }
+
+    return _RangeBound<T>.finite(
+      elementHandler.read(
+        Uint8List.fromList(encoding.encode(value)),
+        isText: true,
+        encoding: encoding,
+      ),
+    );
+  }
+}
+
+class _RangeBounds {
+  const _RangeBounds(this.lower, this.upper);
+
+  final _RangeBoundText lower;
+  final _RangeBoundText upper;
+}
+
+class _RangeBoundText {
+  const _RangeBoundText(this.text, this.quoted);
+
+  final String text;
+  final bool quoted;
+}
+
+class _RangeBound<T> {
+  const _RangeBound._({required this.infinite, this.value});
+
+  factory _RangeBound.infinite() => _RangeBound<T>._(infinite: true);
+
+  factory _RangeBound.finite(T value) =>
+      _RangeBound<T>._(infinite: false, value: value);
+
+  final bool infinite;
+  final T? value;
 }

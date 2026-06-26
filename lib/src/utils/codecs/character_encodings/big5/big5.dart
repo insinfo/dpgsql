@@ -80,7 +80,7 @@ class Big5Encoder extends Converter<String, List<int>> {
         dst.add(r);
         continue;
       } else {
-        // TODO(RV) consider supporting multiple bytes.
+        // NOTE(RV) consider supporting multiple bytes.
         if (_encode0Low <= r && r < _encode0High) {
           r = _encodeTable0[r - _encode0Low];
           if (r != null && r != 0) {
