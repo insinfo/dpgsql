@@ -822,6 +822,38 @@ class DpgsqlConnector {
     }
   }
 
+  Future<Object?> executeScalar(
+    String sql, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    bool rewriteParameters = true,
+  }) async {
+    final preparedDescription =
+        statementName == null ? null : _preparedRowDescriptions[statementName];
+    if (preparedDescription != null) {
+      return _executePreparedScalarFast(
+        statementName!,
+        parameters,
+        preparedDescription,
+      );
+    }
+
+    final reader = await executeReader(
+      sql,
+      parameters: parameters,
+      statementName: statementName,
+      rewriteParameters: rewriteParameters,
+    );
+    try {
+      if (!await reader.read() || reader.fieldCount == 0) {
+        return null;
+      }
+      return reader.getValue(0);
+    } finally {
+      await reader.close();
+    }
+  }
+
   Future<List<Map<String, dynamic>>> executeMaps(
     String sql, {
     DpgsqlParameterCollection? parameters,
@@ -1522,6 +1554,94 @@ class DpgsqlConnector {
       }
       if (msg is RowDescriptionMessage) {
         continue;
+      }
+    }
+  }
+
+  Future<Object?> _executePreparedScalarFast(
+    String statementName,
+    DpgsqlParameterCollection? parameters,
+    RowDescriptionMessage rowDescription,
+  ) async {
+    final params = parameters ?? DpgsqlParameterCollection();
+    final parameterValues = <Uint8List?>[];
+    final parameterFormatCodes = <int>[];
+
+    for (final p in params) {
+      if (p.value == null) {
+        parameterValues.add(null);
+        parameterFormatCodes.add(0);
+        continue;
+      }
+
+      TypeHandler? handler;
+      if (p.dpgsqlDbType != null) {
+        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
+      }
+      handler ??= _typeRegistry.resolveByValue(p.value);
+
+      if (handler != null) {
+        parameterValues.add(handler.write(p.value));
+        parameterFormatCodes.add(1);
+      } else {
+        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
+        parameterFormatCodes.add(0);
+      }
+    }
+
+    await _frontendMessages!.writeBind(
+      portalName: '',
+      statementName: statementName,
+      parameterFormatCodes: parameterFormatCodes,
+      parameterValues: parameterValues,
+      resultFormatCodes: [1],
+      flush: false,
+    );
+    await _frontendMessages!.writeExecute(flush: false);
+    await _frontendMessages!.writeSync();
+
+    final fields = rowDescription.fields;
+    final handlers = List<TypeHandler?>.filled(fields.length, null);
+    final oids = List<int>.filled(fields.length, 0);
+    for (var i = 0; i < fields.length; i++) {
+      final oid = fields[i].oid;
+      oids[i] = oid;
+      handlers[i] = _typeRegistry.resolve(oid);
+    }
+
+    Object? scalar;
+    var hasScalar = false;
+    while (true) {
+      final msg = await readMessage();
+      if (msg is BindCompleteMessage ||
+          msg is ParseCompleteMessage ||
+          msg is CloseCompletedMessage ||
+          msg is ParameterDescriptionMessage ||
+          msg is NoDataMessage ||
+          msg is CommandCompleteMessage ||
+          msg is RowDescriptionMessage) {
+        continue;
+      }
+      if (msg is DataRowMessage) {
+        if (!hasScalar && msg.columnCount > 0) {
+          scalar = _decodeMaterializedValue(msg, 0, oids, handlers);
+          hasScalar = true;
+        }
+        continue;
+      }
+      if (msg is ReadyForQueryMessage) {
+        return scalar;
+      }
+      if (msg is ErrorResponseMessage) {
+        final err = msg.error;
+        throw PostgresException(
+          severity: err.severity ?? 'ERROR',
+          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
+          sqlState: err.sqlState ?? '00000',
+          messageText: err.messageText ?? 'Unknown Error',
+          detail: err.detail,
+          hint: err.hint,
+        );
       }
     }
   }

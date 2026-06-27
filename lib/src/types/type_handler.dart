@@ -319,6 +319,95 @@ class ByteaHandler extends TypeHandler<Uint8List> {
   static bool _isOctal(int codeUnit) => codeUnit >= 0x30 && codeUnit <= 0x37;
 }
 
+class UuidHandler extends TypeHandler<dynamic> {
+  const UuidHandler();
+
+  @override
+  int get oid => Oid.uuid;
+
+  @override
+  DpgsqlUuid read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      return DpgsqlUuid.parse(encoding.decode(buffer));
+    }
+    if (buffer.length != 16) {
+      throw FormatException('Invalid uuid length: ${buffer.length}');
+    }
+    return DpgsqlUuid(buffer);
+  }
+
+  @override
+  Uint8List write(dynamic value, {Encoding encoding = utf8}) {
+    if (value is DpgsqlUuid) {
+      return value.toBytes();
+    }
+    if (value is String) {
+      return DpgsqlUuid.parse(value).toBytes();
+    }
+    if (value is Uint8List) {
+      return DpgsqlUuid(value).toBytes();
+    }
+    if (value is List<int>) {
+      return DpgsqlUuid(value).toBytes();
+    }
+    throw ArgumentError.value(
+        value, 'value', 'Expected DpgsqlUuid or UUID text');
+  }
+}
+
+class BitStringHandler extends TypeHandler<dynamic> {
+  const BitStringHandler(this.oid);
+
+  @override
+  final int oid;
+
+  @override
+  DpgsqlBitString read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      return DpgsqlBitString(encoding.decode(buffer));
+    }
+    if (buffer.length < 4) {
+      throw FormatException('Invalid bit string length: ${buffer.length}');
+    }
+    final bitLength = ByteData.sublistView(buffer, 0, 4).getInt32(0);
+    if (bitLength < 0) {
+      throw FormatException('Invalid bit string bit length: $bitLength');
+    }
+    final byteLength = (bitLength + 7) >> 3;
+    if (buffer.length != 4 + byteLength) {
+      throw FormatException(
+          'Invalid bit string payload length: ${buffer.length}');
+    }
+
+    final result = StringBuffer();
+    for (var bit = 0; bit < bitLength; bit++) {
+      final byte = buffer[4 + (bit >> 3)];
+      final mask = 0x80 >> (bit & 7);
+      result.write((byte & mask) == 0 ? '0' : '1');
+    }
+    return DpgsqlBitString(result.toString());
+  }
+
+  @override
+  Uint8List write(dynamic value, {Encoding encoding = utf8}) {
+    final bits = value is DpgsqlBitString ? value.value : value.toString();
+    final bitString = DpgsqlBitString(bits);
+    final bitLength = bitString.length;
+    final byteLength = (bitLength + 7) >> 3;
+    final output = Uint8List(4 + byteLength);
+    ByteData.sublistView(output, 0, 4).setInt32(0, bitLength);
+
+    for (var bit = 0; bit < bitLength; bit++) {
+      if (bitString.value.codeUnitAt(bit) == 0x31) {
+        output[4 + (bit >> 3)] |= 0x80 >> (bit & 7);
+      }
+    }
+    return output;
+  }
+}
+
 class ArrayHandler<E> extends TypeHandler<List<E>> {
   ArrayHandler(this.oid, this.elementHandler);
 
@@ -552,6 +641,9 @@ class TypeHandlerRegistry {
     register(const FloatHandler());
     register(const DoubleHandler());
     register(const ByteaHandler());
+    register(const UuidHandler());
+    register(const BitStringHandler(Oid.bit));
+    register(const BitStringHandler(Oid.varbit));
 
     if (useDpgsqlTypes) {
       register(const DpgsqlDateHandler());
@@ -623,6 +715,8 @@ class TypeHandlerRegistry {
     if (value is double) return _oidHandlers[Oid.float8];
     if (value is DateTime) return _oidHandlers[Oid.timestamp];
     if (value is Uint8List) return _oidHandlers[Oid.bytea];
+    if (value is DpgsqlUuid) return _oidHandlers[Oid.uuid];
+    if (value is DpgsqlBitString) return _oidHandlers[Oid.varbit];
 
     // Dpgsql Types
     if (value is DpgsqlDate) return _oidHandlers[Oid.date];
@@ -667,6 +761,9 @@ class TypeHandlerRegistry {
     if (T == double) return _oidHandlers[Oid.float8] as TypeHandler<T>?;
     if (T == DateTime) return _oidHandlers[Oid.timestamp] as TypeHandler<T>?;
     if (T == Uint8List) return _oidHandlers[Oid.bytea] as TypeHandler<T>?;
+    if (T == DpgsqlUuid) return _oidHandlers[Oid.uuid] as TypeHandler<T>?;
+    if (T == DpgsqlBitString)
+      return _oidHandlers[Oid.varbit] as TypeHandler<T>?;
 
     if (T == DpgsqlDate) return _oidHandlers[Oid.date] as TypeHandler<T>?;
     if (T == DpgsqlTime) return _oidHandlers[Oid.time] as TypeHandler<T>?;
@@ -766,6 +863,8 @@ class TypeHandlerRegistry {
         return _oidHandlers[Oid.timestamptz];
       case DpgsqlDbType.uuid:
         return _oidHandlers[Oid.uuid];
+      case DpgsqlDbType.bit:
+        return _oidHandlers[Oid.bit];
       case DpgsqlDbType.varbit:
         return _oidHandlers[Oid.varbit];
       case DpgsqlDbType.varchar:

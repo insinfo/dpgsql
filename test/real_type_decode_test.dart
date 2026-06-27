@@ -69,6 +69,54 @@ SELECT
     }
   });
 
+  test('real connection decodes uuid, bit and varbit types', () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      final reader = await conn.createCommand('''
+SELECT
+  '00112233-4455-6677-8899-aabbccddeeff'::uuid,
+  B'1010'::bit(4),
+  B'101100001'::varbit
+''').executeReader();
+
+      try {
+        expect(await reader.read(), isTrue);
+        expect(reader.getValue(0),
+            DpgsqlUuid.parse('00112233-4455-6677-8899-aabbccddeeff'));
+        expect(reader.getValue(1), DpgsqlBitString('1010'));
+        expect(reader.getValue(2), DpgsqlBitString('101100001'));
+        expect(await reader.read(), isFalse);
+      } finally {
+        await reader.close();
+      }
+
+      final command = conn.createCommand('''
+SELECT
+  @uuid_value::uuid,
+  @bit_value::bit(4),
+  @varbit_value::varbit
+''');
+      command.parameters.add(
+          DpgsqlParameter('uuid_value', '00112233-4455-6677-8899-aabbccddeeff')
+            ..dpgsqlDbType = DpgsqlDbType.uuid);
+      command.parameters.add(DpgsqlParameter('bit_value', '0101')
+        ..dpgsqlDbType = DpgsqlDbType.bit);
+      command.parameters.add(
+          DpgsqlParameter('varbit_value', DpgsqlBitString('111000'))
+            ..dpgsqlDbType = DpgsqlDbType.varbit);
+
+      final rows = await command.executeRows();
+      expect(rows.single[0],
+          DpgsqlUuid.parse('00112233-4455-6677-8899-aabbccddeeff'));
+      expect(rows.single[1], DpgsqlBitString('0101'));
+      expect(rows.single[2], DpgsqlBitString('111000'));
+    } finally {
+      await conn.close();
+    }
+  });
+
   test('executeRows materializes decoded result sets', () async {
     final conn = await openRealConnectionOrSkip();
     if (conn == null) return;
@@ -88,6 +136,27 @@ SELECT
       expect(rows.first[1], equals('materialized'));
       expect(rows.first[2], equals(10.5));
       expect(rows.first[3], isA<DateTime>());
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('executeScalar returns first column and supports prepared commands',
+      () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      expect(await conn.executeScalar('SELECT 42::int'), equals(42));
+      expect(await conn.executeScalar('SELECT NULL::text'), isNull);
+
+      final command = conn.createCommand('SELECT @value::int + 1');
+      command.parameters.addWithValue('value', 10);
+      await command.prepare();
+
+      expect(await command.executeScalar(), equals(11));
+      command.parameters[0].value = 20;
+      expect(await command.executeScalar(), equals(21));
     } finally {
       await conn.close();
     }
@@ -427,16 +496,16 @@ SELECT 123.45::numeric AS amount,
     try {
       final value = await executeScalar(
         conn,
-        "SELECT '2000-01-01 00:00:00+00'::timestamptz",
+        "SELECT '2024-07-01 00:00:00+00'::timestamptz",
       ) as DateTime;
 
       expect(value.isUtc, isFalse);
-      expect(value.year, equals(1999));
-      expect(value.month, equals(12));
-      expect(value.day, equals(31));
-      expect(value.hour, equals(22));
-      expect(value.timeZoneOffset, equals(const Duration(hours: -2)));
-      expect(value.isAtSameMomentAs(DateTime.utc(2000)), isTrue);
+      expect(value.year, equals(2024));
+      expect(value.month, equals(6));
+      expect(value.day, equals(30));
+      expect(value.hour, equals(21));
+      expect(value.timeZoneOffset, equals(const Duration(hours: -3)));
+      expect(value.isAtSameMomentAs(DateTime.utc(2024, 7, 1)), isTrue);
     } finally {
       await conn.close();
     }

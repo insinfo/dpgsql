@@ -1,6 +1,8 @@
 /// Custom types for Dpgsql Dart port.
 /// These types provide raw access to PostgreSQL values without lossy conversion.
 
+import 'dart:typed_data';
+
 import 'package:meta/meta.dart';
 
 /// Represents a PostgreSQL Interval type.
@@ -297,6 +299,136 @@ class DpgsqlMoney {
 
   @override
   String toString() => 'DpgsqlMoney($value)';
+}
+
+/// Represents a PostgreSQL uuid value.
+///
+/// Dart has no built-in Guid type, so this mirrors Npgsql's Guid mapping with
+/// a compact 16-byte value and canonical lower-case text formatting.
+@immutable
+class DpgsqlUuid {
+  final Uint8List _bytes;
+
+  DpgsqlUuid(List<int> bytes)
+      : _bytes = Uint8List.fromList(_validateBytes(bytes));
+
+  factory DpgsqlUuid.parse(String value) {
+    var text = value.trim();
+    if (text.startsWith('{') && text.endsWith('}')) {
+      text = text.substring(1, text.length - 1);
+    }
+    text = text.replaceAll('-', '');
+    if (text.length != 32) {
+      throw FormatException('Invalid UUID length', value);
+    }
+
+    final bytes = Uint8List(16);
+    for (var i = 0; i < 16; i++) {
+      bytes[i] = (_hexValue(text.codeUnitAt(i * 2)) << 4) |
+          _hexValue(text.codeUnitAt((i * 2) + 1));
+    }
+    return DpgsqlUuid(bytes);
+  }
+
+  Uint8List toBytes() => Uint8List.fromList(_bytes);
+
+  static List<int> _validateBytes(List<int> bytes) {
+    if (bytes.length != 16) {
+      throw FormatException('UUID must contain exactly 16 bytes');
+    }
+    for (final byte in bytes) {
+      if (byte < 0 || byte > 255) {
+        throw RangeError.range(byte, 0, 255, 'byte');
+      }
+    }
+    return bytes;
+  }
+
+  static int _hexValue(int codeUnit) {
+    if (codeUnit >= 0x30 && codeUnit <= 0x39) {
+      return codeUnit - 0x30;
+    }
+    if (codeUnit >= 0x41 && codeUnit <= 0x46) {
+      return codeUnit - 0x41 + 10;
+    }
+    if (codeUnit >= 0x61 && codeUnit <= 0x66) {
+      return codeUnit - 0x61 + 10;
+    }
+    throw FormatException(
+        'Invalid UUID hex digit: ${String.fromCharCode(codeUnit)}');
+  }
+
+  static String _hexByte(int value) => value.toRadixString(16).padLeft(2, '0');
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! DpgsqlUuid) return false;
+    for (var i = 0; i < 16; i++) {
+      if (_bytes[i] != other._bytes[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode {
+    var hash = 17;
+    for (final byte in _bytes) {
+      hash = (hash * 31) ^ byte;
+    }
+    return hash;
+  }
+
+  @override
+  String toString() {
+    final hex = StringBuffer();
+    for (var i = 0; i < 16; i++) {
+      hex.write(_hexByte(_bytes[i]));
+    }
+    final value = hex.toString();
+    return '${value.substring(0, 8)}-'
+        '${value.substring(8, 12)}-'
+        '${value.substring(12, 16)}-'
+        '${value.substring(16, 20)}-'
+        '${value.substring(20)}';
+  }
+}
+
+/// Represents PostgreSQL bit/varbit values.
+///
+/// PostgreSQL binary format stores a 32-bit bit length followed by packed bits,
+/// most-significant bit first in each byte. The public representation keeps the
+/// exact textual bit sequence for simple equality and formatting.
+@immutable
+class DpgsqlBitString {
+  final String value;
+
+  DpgsqlBitString(String value) : value = _validate(value);
+
+  int get length => value.length;
+
+  bool get isEmpty => value.isEmpty;
+
+  static String _validate(String value) {
+    for (var i = 0; i < value.length; i++) {
+      final codeUnit = value.codeUnitAt(i);
+      if (codeUnit != 0x30 && codeUnit != 0x31) {
+        throw FormatException('Invalid bit string digit', value, i);
+      }
+    }
+    return value;
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DpgsqlBitString && value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+
+  @override
+  String toString() => value;
 }
 
 /// Represents a PostgreSQL Numeric/Decimal type.

@@ -26,6 +26,7 @@ enum DpgsqlDbType {
   timestamp,
   timestampTz,
   uuid,
+  bit,
   varbit,
   varchar,
   xml,

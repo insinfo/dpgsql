@@ -106,6 +106,8 @@ void main() {
     expect(settings.forceDecodeTimestampAsUTC, isTrue);
     expect(settings.forceDecodeTimestamptzAsUTC, isTrue);
     expect(settings.useCurrentOffsetForLocalTimestamp, isTrue);
+    expect(
+        settings.ianaTimeZoneDatabaseScope, PgTimeZoneDatabaseScope.latestAll);
 
     final decoded = TimezoneHelper.decodeTimestamp(
       0,
@@ -146,31 +148,46 @@ void main() {
       useIanaTimeZoneDatabase: true,
     );
 
-    final july2000Micros =
-        DateTime.utc(2000, 7, 1).difference(DateTime.utc(2000)).inMicroseconds;
+    final july2024Micros =
+        DateTime.utc(2024, 7, 1).difference(DateTime.utc(2000)).inMicroseconds;
     final decoded = TimezoneHelper.decodeTimestampTz(
-      july2000Micros,
+      july2024Micros,
       timeZone: settings,
     );
 
     expect(decoded!.isUtc, isFalse);
-    expect(decoded.year, 2000);
+    expect(decoded.year, 2024);
     expect(decoded.month, 6);
     expect(decoded.day, 30);
     expect(decoded.hour, 21);
     expect(decoded.timeZoneOffset, const Duration(hours: -3));
   });
 
-  test('TimeZoneSettings can use IANA instant conversion for timestamptz', () {
+  test('TimeZoneSettings can select compact IANA timezone database', () {
+    final builder = DpgsqlConnectionStringBuilder(
+      'Host=localhost;Use IANA Time Zone Database=true;'
+      'IANA Time Zone Database Scope=latest_10y',
+    );
+    final settings = builder.timeZone;
+
+    expect(settings.useIanaTimeZoneDatabase, isTrue);
+    expect(
+        settings.ianaTimeZoneDatabaseScope, PgTimeZoneDatabaseScope.latest10y);
+  });
+
+  test('latest_all preserves historical Sao Paulo timestamptz conversion', () {
     final settings = const TimeZoneSettings(
       'America/Sao_Paulo',
       forceDecodeTimestamptzAsUTC: false,
       useCurrentOffsetForLocalTimestamp: false,
       useIanaTimeZoneDatabase: true,
+      ianaTimeZoneDatabaseScope: PgTimeZoneDatabaseScope.latestAll,
     );
 
+    final jan2000Micros =
+        DateTime.utc(2000, 1, 1).difference(DateTime.utc(2000)).inMicroseconds;
     final decoded = TimezoneHelper.decodeTimestampTz(
-      0,
+      jan2000Micros,
       timeZone: settings,
     );
 
@@ -181,6 +198,30 @@ void main() {
     expect(decoded.hour, 22);
     expect(decoded.timeZoneOffset, const Duration(hours: -2));
     expect(decoded.isAtSameMomentAs(DateTime.utc(2000)), isTrue);
+  });
+
+  test('TimeZoneSettings can use IANA instant conversion for timestamptz', () {
+    final settings = const TimeZoneSettings(
+      'America/Sao_Paulo',
+      forceDecodeTimestamptzAsUTC: false,
+      useCurrentOffsetForLocalTimestamp: false,
+      useIanaTimeZoneDatabase: true,
+    );
+
+    final july2024Micros =
+        DateTime.utc(2024, 7, 1).difference(DateTime.utc(2000)).inMicroseconds;
+    final decoded = TimezoneHelper.decodeTimestampTz(
+      july2024Micros,
+      timeZone: settings,
+    );
+
+    expect(decoded!.isUtc, isFalse);
+    expect(decoded.year, 2024);
+    expect(decoded.month, 6);
+    expect(decoded.day, 30);
+    expect(decoded.hour, 21);
+    expect(decoded.timeZoneOffset, const Duration(hours: -3));
+    expect(decoded.isAtSameMomentAs(DateTime.utc(2024, 7, 1)), isTrue);
   });
 
   test('TimeZoneSettings does not resolve IANA database unless enabled', () {

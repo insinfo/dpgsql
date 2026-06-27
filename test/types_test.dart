@@ -8,6 +8,7 @@ import 'package:dpgsql/src/types/dpgsql_range.dart';
 import 'package:dpgsql/src/types/range_handlers.dart';
 import 'package:dpgsql/src/types/dpgsql_types.dart';
 import 'package:dpgsql/src/types/type_handler.dart';
+import 'package:dpgsql/src/dpgsql_db_type.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -49,6 +50,89 @@ void main() {
       );
 
       expect(result, orderedEquals(<int>[97, 98, 99, 92, 1]));
+    });
+  });
+
+  group('UUID and bit string types', () {
+    test('DpgsqlUuid parses and formats canonical UUID text', () {
+      final uuid = DpgsqlUuid.parse('{00112233-4455-6677-8899-aabbccddeeff}');
+
+      expect(uuid.toString(), '00112233-4455-6677-8899-aabbccddeeff');
+      expect(
+          uuid.toBytes(),
+          orderedEquals(<int>[
+            0x00,
+            0x11,
+            0x22,
+            0x33,
+            0x44,
+            0x55,
+            0x66,
+            0x77,
+            0x88,
+            0x99,
+            0xaa,
+            0xbb,
+            0xcc,
+            0xdd,
+            0xee,
+            0xff,
+          ]));
+      expect(DpgsqlUuid.parse('00112233445566778899aabbccddeeff'), uuid);
+    });
+
+    test('UuidHandler reads text/binary and writes String values', () {
+      const handler = UuidHandler();
+      const text = '00112233-4455-6677-8899-aabbccddeeff';
+      final binary = handler.write(text);
+
+      expect(binary.length, 16);
+      expect(handler.read(binary).toString(), text);
+      expect(
+        handler
+            .read(Uint8List.fromList(text.codeUnits), isText: true)
+            .toString(),
+        text,
+      );
+    });
+
+    test('BitStringHandler reads and writes PostgreSQL packed binary format',
+        () {
+      const handler = BitStringHandler(0);
+      final bytes = handler.write(DpgsqlBitString('101100001'));
+
+      expect(
+          bytes,
+          orderedEquals(<int>[
+            0x00,
+            0x00,
+            0x00,
+            0x09,
+            0xb0,
+            0x80,
+          ]));
+      expect(handler.read(bytes), DpgsqlBitString('101100001'));
+      expect(
+        handler.read(Uint8List.fromList('0101'.codeUnits), isText: true),
+        DpgsqlBitString('0101'),
+      );
+    });
+
+    test('TypeHandlerRegistry resolves uuid, bit and varbit handlers', () {
+      final registry = TypeHandlerRegistry();
+
+      expect(
+          registry.resolveByValue(
+              DpgsqlUuid.parse('00112233-4455-6677-8899-aabbccddeeff')),
+          isA<UuidHandler>());
+      expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.uuid),
+          isA<UuidHandler>());
+      expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.bit),
+          isA<BitStringHandler>());
+      expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.varbit),
+          isA<BitStringHandler>());
+      expect(registry.resolveByValue(DpgsqlBitString('1010')),
+          isA<BitStringHandler>());
     });
   });
 

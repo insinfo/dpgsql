@@ -1,7 +1,7 @@
 
 
-import '../src/env.dart';
-import '../src/location.dart';
+import 'env.dart';
+import 'location.dart';
 
 /// TimeZone aware DateTime.
 class TZDateTime implements DateTime {

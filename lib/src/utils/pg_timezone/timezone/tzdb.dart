@@ -6,8 +6,8 @@ library timezone.src.tzdb;
 import 'dart:collection';
 import 'dart:convert' show ascii;
 import 'dart:typed_data';
-import '../src/location.dart';
-import '../src/location_database.dart';
+import 'location.dart';
+import 'location_database.dart';
 
 /// Serialize TimeZone Database
 List<int> tzdbSerialize(LocationDatabase db) {

@@ -2,7 +2,9 @@
 
 import '../timezone.dart';
 
-import 'pg_timezone_data.dart';
+import '../../../timezone_database_scope.dart';
+import 'pg_timezone_data_10y.dart' as latest_10y;
+import 'pg_timezone_data_all.dart' as latest_all;
 
 /// PgLocationDatabase provides interface to find [Location]s by their name.
 ///
@@ -12,8 +14,17 @@ import 'pg_timezone_data.dart';
 ///     Location loc = db.get('US/Eastern');
 ///
 class PgLocationDatabase {
+  PgLocationDatabase([this.scope = PgTimeZoneDatabaseScope.latestAll]);
+
+  PgTimeZoneDatabaseScope scope;
+
   /// Mapping between [Location] name and [Location].
-  final locations = pgDatabaseMap; //<String, Location>{};
+  Map<String, Location> get locations {
+    return switch (scope) {
+      PgTimeZoneDatabaseScope.latestAll => latest_all.pgDatabaseMap,
+      PgTimeZoneDatabaseScope.latest10y => latest_10y.pgDatabaseMap,
+    };
+  }
 
   /// Adds [Location] to the database.
   void add(Location location) {
@@ -40,8 +51,6 @@ class PgLocationDatabase {
   /// Clears the database of all [Location] entries.
   void clear() => locations.clear();
 
-
-
   /// Returns whether the database is empty, or has [Location] entries.
   bool get isInitialized => locations.isNotEmpty;
 }
@@ -56,7 +65,20 @@ PgLocationDatabase get timeZoneDatabase => _database;
 /// ```dart
 /// final detroit = getLocation('America/Detroit');
 /// ```
-Location getLocation(String pgTimeZone) {
+void setTimeZoneDatabaseScope(PgTimeZoneDatabaseScope scope) {
+  timeZoneDatabase.scope = scope;
+}
+
+/// Find [Location] by its name.
+///
+/// ```dart
+/// final detroit = getLocation('America/Detroit');
+/// ```
+Location getLocation(
+  String pgTimeZone, {
+  PgTimeZoneDatabaseScope scope = PgTimeZoneDatabaseScope.latestAll,
+}) {
+  setTimeZoneDatabaseScope(scope);
   final tzLocations = timeZoneDatabase.locations.entries
       .where((e) {
         return e.key.toLowerCase() == pgTimeZone ||
@@ -70,5 +92,5 @@ Location getLocation(String pgTimeZone) {
         'Location with the name "$pgTimeZone" doesn\'t exist');
   }
   final tzLocation = tzLocations.first;
-  return tzLocation;  
+  return tzLocation;
 }

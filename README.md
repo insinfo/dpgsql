@@ -202,6 +202,15 @@ non-UTC `timestamptz` decoding, also set:
 'Use IANA Time Zone Database=true'
 ```
 
+`latest_all` is used by default when the IANA database is enabled, so
+historical values such as year 2000 timestamps follow historical DST rules.
+Applications that only decode current/future timestamps can choose the compact
+database to reduce runtime initialization cost:
+
+```dart
+'Use IANA Time Zone Database=true;IANA Time Zone Database Scope=latest_10y'
+```
+
 Npgsql's modern .NET behavior represents `timestamp without time zone` as an
 unspecified `DateTimeKind` and `timestamptz` as UTC. Dart does not have an
 equivalent to `DateTimeKind.Unspecified`, so `dpgsql` exposes the choice as
@@ -340,23 +349,31 @@ values are exposed as `null` by default, matching compatibility expectations
 from `postgresql-fork`/`dargres` style applications. Set
 `Throw On DateTime Infinity=true` in the connection string to fail fast instead.
 Named timezone support uses the generated Dart database in
-`lib/src/dependencies/timezone/src/pg_timezone_data.dart`; runtime code does
-not load `latest.tzf` or any external timezone file.
+`lib/src/utils/pg_timezone/timezone/pg_timezone_data_all.dart` and
+`lib/src/utils/pg_timezone/timezone/pg_timezone_data_10y.dart`; runtime code
+does not load `latest.tzf` or any external timezone file.
 
-To refresh the bundled IANA timezone database directly from IANA source files
-without `zic` or `package:timezone`, run:
-
-```bash
-dart run scripts/generate_pg_timezone_data.dart --download-iana --scope latest_all
-```
-
-The generator parses `Rule`, `Zone`, and `Link` records in Dart and writes the
-runtime Dart database directly. Use `--iana path/to/tzdata-dir-or.tar.gz` for a
-local IANA source checkout/archive. The legacy `.tzf` path is still available
-for comparison or quick regeneration from `referencias/timezone`:
+By default dpgsql uses `latest_all` when named IANA conversion is enabled. This
+is the robust choice for historical PostgreSQL application data. The compact
+`latest_10y` database is also shipped and can be selected with
+`IANA Time Zone Database Scope=latest_10y`. To refresh the compact database from
+the vendored `.tzf`, run:
 
 ```bash
 dart run scripts/generate_pg_timezone_data.dart
+```
+
+To refresh the full historical database, run:
+
+```bash
+dart run scripts/generate_pg_timezone_data.dart --scope latest_all --output lib/src/utils/pg_timezone/timezone/pg_timezone_data_all.dart
+```
+
+To rebuild directly from IANA source files without `zic` or `package:timezone`,
+use:
+
+```bash
+dart run scripts/generate_pg_timezone_data.dart --download-iana --scope latest_10y
 ```
 
 ## Continuous Integration

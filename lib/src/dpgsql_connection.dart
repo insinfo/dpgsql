@@ -202,6 +202,23 @@ class DpgsqlConnection {
     );
   }
 
+  Future<Object?> executeScalar(
+    String commandText, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    bool rewriteParameters = true,
+  }) {
+    if (_connector == null) {
+      throw StateError('Connection closed');
+    }
+    return _connector!.executeScalar(
+      commandText,
+      parameters: parameters,
+      statementName: statementName,
+      rewriteParameters: rewriteParameters,
+    );
+  }
+
   Future<List<Map<String, dynamic>>> executeMaps(
     String commandText, {
     DpgsqlParameterCollection? parameters,

@@ -1,4 +1,4 @@
-import '../dependencies/timezone/pg_timezone.dart' as pg_tz;
+import '../utils/pg_timezone/pg_timezone.dart' as pg_tz;
 import '../timezone_settings.dart';
 
 /// Timezone utilities for handling PostgreSQL timestamp types correctly.
@@ -189,7 +189,10 @@ class TimezoneHelper {
       return utcDateTime.toLocal();
     }
 
-    final location = _resolvePgTimeZoneLocation(timeZoneName);
+    final location = _resolvePgTimeZoneLocation(
+      timeZoneName,
+      timeZone.ianaTimeZoneDatabaseScope,
+    );
     if (!timeZone.useCurrentOffsetForLocalTimestamp) {
       return pg_tz.TZDateTime.from(utcDateTime, location);
     }
@@ -213,14 +216,17 @@ class TimezoneHelper {
     );
   }
 
-  static pg_tz.Location _resolvePgTimeZoneLocation(String value) {
-    final key = value.toLowerCase();
+  static pg_tz.Location _resolvePgTimeZoneLocation(
+    String value,
+    pg_tz.PgTimeZoneDatabaseScope scope,
+  ) {
+    final key = '${scope.name}:${value.toLowerCase()}';
     final cached = _locationCache[key];
     if (cached != null) {
       return cached;
     }
 
-    final location = pg_tz.getLocation(key);
+    final location = pg_tz.getLocation(value.toLowerCase(), scope: scope);
     _locationCache[key] = location;
     return location;
   }

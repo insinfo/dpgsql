@@ -1,5 +1,29 @@
 # TODO dpgsql
 
+## Progresso 2026-06-26 (timezone latest_all configuravel)
+
+- Decidido que, para um driver PostgreSQL robusto estilo Npgsql, `latest_all` deve ser o padrao quando `Use IANA Time Zone Database=true`, evitando erro historico em timestamps antigos como ano 2000.
+- Gerados dois bancos Dart versionados: `pg_timezone_data_all.dart` com historico completo e `pg_timezone_data_10y.dart` compacto.
+- Adicionado `PgTimeZoneDatabaseScope` publico com `latestAll` e `latest10y`.
+- `TimeZoneSettings` ganhou `ianaTimeZoneDatabaseScope`, default `PgTimeZoneDatabaseScope.latestAll`.
+- `DpgsqlConnectionStringBuilder` parseia `IANA Time Zone Database Scope=latest_all|latest_10y` e aliases `Pg Time Zone Database Scope`/`Time Zone Database Scope`.
+- `TimezoneHelper` passa o escopo escolhido para `pg_timezone`, e o cache de locations inclui o escopo para nao misturar dados `all` e `10y`.
+- `pg_location_database.dart` agora importa os dois arquivos gerados com prefixo e inicializa somente o mapa selecionado em runtime. O binario fica maior, mas quem escolhe `latest_10y` evita inicializar o mapa completo.
+- Teste `timezone_encoding_test.dart` cobre parsing do escopo compacto e valida que `latest_all` converte `2000-01-01 00:00:00Z` para `America/Sao_Paulo` com offset historico `-02:00`.
+- Validacao local: `dart analyze`, `timeout-cli.exe 30 dart test test\timezone_encoding_test.dart` e `timeout-cli.exe 30 dart test test\real_type_decode_test.dart` passando.
+
+## Progresso 2026-06-26 (tipos uuid/bit + executeScalar)
+
+- Mantida a decisao de API publica com prefixo `Dpgsql*`, sem voltar para nomes `Npgsql*`; o port continua inspirado no Npgsql, mas preservando identidade do pacote Dart.
+- Adicionado `DpgsqlUuid`, com parsing de UUID canônico/com braces/sem hifens, armazenamento binario de 16 bytes, igualdade por bytes e `toString()` canonico lower-case.
+- Adicionado `DpgsqlBitString`, representando valores PostgreSQL `bit`/`varbit` com validacao de digitos `0`/`1`.
+- Implementados `UuidHandler` e `BitStringHandler`, cobrindo leitura texto/binaria e escrita binaria PostgreSQL. Parametros explicitos aceitam `DpgsqlUuid`, `DpgsqlBitString` ou `String` quando `DpgsqlDbType.uuid`, `DpgsqlDbType.bit` ou `DpgsqlDbType.varbit` sao informados.
+- `TypeHandlerRegistry` agora registra OIDs `uuid`, `bit` e `varbit`, resolve por valor Dart forte e por `DpgsqlDbType`.
+- `DpgsqlDbType` ganhou `bit`, separando corretamente `bit` de `varbit`.
+- Adicionado `DpgsqlCommand.executeScalar()` e `DpgsqlConnection.executeScalar()`. O conector possui fast path para statements preparados com `RowDescription` cacheado, retornando a primeira coluna sem materializar lista de linhas.
+- Testes unitarios em `types_test.dart` cobrem UUID, bit/varbit e resolucao de handlers. Teste real em `real_type_decode_test.dart` valida roundtrip com PostgreSQL real e `executeScalar()` preparado.
+- Validacao local: `dart analyze`, `timeout-cli.exe 30 dart test test\types_test.dart` e `timeout-cli.exe 30 dart test test\real_type_decode_test.dart` passando.
+
 ## Progresso 2026-06-26 (maps para Eloquent/Sali)
 
 - Lido o fluxo atual do `new_sali`/`eloquent`: `DatabaseService` passa `timezone=America/Sao_Paulo` como configuracao de sessao e os repositorios consomem massivamente `List<Map<String, dynamic>>`/`PDOResults`.
@@ -37,9 +61,9 @@
 - `DpgsqlConnectionStringBuilder` agora parseia `TimeZone` e as flags de decode, propagando a configuracao para conexoes normais, pool, replicacao, type handlers, `DpgsqlDataReader` e `PgRow`.
 - `DpgsqlConnector` envia `TimeZone` no startup quando configurado e o pool restaura `TimeZone`/`client_encoding` apos reset da sessao.
 - Decode/encode binario de `date`, `timestamp` e `timestamptz` deixou de usar `epoch.add(Duration(...))` nos hot paths, usando calculo direto por micros desde Unix epoch para reduzir alocacoes em result sets grandes.
-- Paridade configuravel com `postgresql-fork`/`dargres` para timezone nomeada: vendorizado subconjunto interno de `pg_timezone`/IANA a partir das referencias locais, sem adicionar dependencia runtime externa.
+- Paridade configuravel com `postgresql-fork`/`dargres` para timezone nomeada: vendorizado subconjunto interno de `pg_timezone`/IANA a partir de `scripts/data/latest_10y.tzf` e `scripts/data/latest_all.tzf`, sem adicionar dependencia runtime externa.
 - `timestamptz` com `Force Decode Timestamptz As UTC=false` so usa nomes como `America/Sao_Paulo` e abreviacoes via banco interno quando `Use IANA Time Zone Database=true`; sem essa flag, `TimeZone` permanece apenas configuracao de sessao PostgreSQL, que e o caso atual do `new_sali`/`eloquent`.
-- `lib/src/dependencies/timezone/src/env.dart` nao aponta mais para `latest.tzf`; o driver usa `pg_timezone_data.dart`, arquivo Dart gerado/versionado. `scripts/generate_pg_timezone_data.dart` agora tambem compila fontes IANA em Dart puro (`--download-iana`/`--iana`), parseando `Rule`/`Zone`/`Link` sem `zic.c` e sem `package:timezone`; o caminho `.tzf` continua disponivel apenas para comparacao/regeneracao rapida.
+- `lib/src/utils/pg_timezone/timezone/env.dart` nao aponta mais para `latest.tzf`; o driver usa `pg_timezone_data_all.dart` e `pg_timezone_data_10y.dart`, arquivos Dart gerados/versionados. `scripts/generate_pg_timezone_data.dart` usa `scripts/data/latest_10y.tzf` por padrao para regenerar o compacto, nao depende de diretorio externo de referencias, e tambem compila fontes IANA em Dart puro (`--download-iana`/`--iana`), parseando `Rule`/`Zone`/`Link` sem `zic.c` e sem `package:timezone`; `latest_all` e o padrao robusto em runtime quando IANA esta ligado.
 - Testes adicionados/ajustados em `timezone_encoding_test.dart` e `real_type_decode_test.dart` validando decode UTC default e decode local opcional em banco real.
 - `real_type_decode_test.dart` cobre `timestamptz` real com `TimeZone=America/Sao_Paulo;Use IANA Time Zone Database=true`, e `timezone_encoding_test.dart` cobre que uma timezone invalida nao aciona IANA quando a flag esta desligada.
 
@@ -221,7 +245,7 @@ Principais areas ainda faltando portar ou aprofundar:
 - `NpgsqlDataSourceBuilder`, `NpgsqlSlimDataSourceBuilder` e configuracao fluente de data source.
 - `NpgsqlCommandBuilder`, `NpgsqlDataAdapter`, `NpgsqlFactory` e compatibilidade ADO.NET equivalente.
 - `NpgsqlRawCopyStream` e APIs COPY stream-based/CSV/TEXT.
-- Tipos/conversores avancados: uuid, numeric/decimal dedicado, money, bit string, hstore, inet/cidr/macaddr, ltree, record/composite, enum, domain, multirange, cube, pg_lsn/log sequence number.
+- Tipos/conversores avancados: numeric/decimal dedicado, money, hstore, inet/cidr/macaddr, ltree, record/composite, enum, domain, multirange, cube, pg_lsn/log sequence number. `uuid` e `bit`/`varbit` ja possuem handlers basicos fortes.
 - Replicacao fisica e pgoutput completo: streaming transactions, truncate/type/origin/messages prepared transaction e extensoes equivalentes.
 - Observabilidade: `NpgsqlMetricsOptions`, logging estruturado, tracing/OpenTelemetry e eventos diagnosticos.
 - Multi-host/failover: `NpgsqlMultiHostDataSource`, `TargetSessionAttributes`, load balance e retry de hosts.

@@ -1,14 +1,14 @@
-import '../src/location.dart';
-import '../src/location_database.dart';
-import '../src/tzdb.dart';
+import 'location.dart';
+import 'location_database.dart';
+import 'tzdb.dart';
 
 /// Legacy placeholder from the upstream `timezone` API.
 ///
 /// dpgsql does not load `latest.tzf` at runtime. PostgreSQL/IANA locations used
-/// by the driver are generated as Dart code in `pg_timezone_data.dart` and are
-/// versioned with the package.
-@Deprecated('dpgsql uses the generated pg_timezone_data.dart database.')
-const String tzDataDefaultFilename = 'pg_timezone_data.dart';
+/// by the driver are generated as Dart code in `pg_timezone_data_all.dart` and
+/// `pg_timezone_data_10y.dart` and are versioned with the package.
+@Deprecated('dpgsql uses generated Dart timezone databases.')
+const String tzDataDefaultFilename = 'pg_timezone_data_all.dart';
 
 final _UTC = Location('UTC', [minTime], [0], [TimeZone.UTC]);
 

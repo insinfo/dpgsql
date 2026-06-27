@@ -1,16 +1,15 @@
-import 'dart:collection';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
-import '../lib/src/dependencies/timezone/src/location.dart';
-import '../lib/src/dependencies/timezone/src/location_database.dart';
-import '../lib/src/dependencies/timezone/src/tzdb.dart';
+import '../lib/src/utils/pg_timezone/timezone/location.dart';
+import '../lib/src/utils/pg_timezone/timezone/location_database.dart';
+import '../lib/src/utils/pg_timezone/timezone/tzdb.dart';
 
-const _defaultReferenceDir = 'referencias/timezone';
+const _defaultTzfDir = 'scripts/data';
 const _defaultOutput =
-    'lib/src/dependencies/timezone/src/pg_timezone_data.dart';
-const _defaultScope = 'latest_all';
+    'lib/src/utils/pg_timezone/timezone/pg_timezone_data_10y.dart';
+const _defaultScope = 'latest_10y';
 const _defaultTzfDownloadBase =
     'https://raw.githubusercontent.com/srawlins/timezone/master/lib/data';
 const _ianaRepositoryUri = 'https://data.iana.org/time-zones';
@@ -109,19 +108,18 @@ Future<File> _resolveTzfInput(_Options options) async {
     return target;
   }
 
-  final referenceInput = File(
-    '${options.referenceDir}${Platform.pathSeparator}lib'
-    '${Platform.pathSeparator}data${Platform.pathSeparator}'
-    '${_scopeFilename(options.scope)}',
+  final localInput = File(
+    '$_defaultTzfDir${Platform.pathSeparator}${_scopeFilename(options.scope)}',
   );
-  if (!await referenceInput.exists()) {
-    throw FileSystemException(
-      'Reference timezone database not found. Pass --input, --download, '
-      '--iana, or --download-iana.',
-      referenceInput.path,
-    );
+  if (await localInput.exists()) {
+    return localInput;
   }
-  return referenceInput;
+
+  throw FileSystemException(
+    'Timezone database not found. Pass --input, --download, --iana, '
+    'or --download-iana.',
+    localInput.path,
+  );
 }
 
 Future<File> _downloadIana(_Options options) async {
@@ -172,14 +170,13 @@ LocationDatabase _filterDatabase(LocationDatabase db, String scope) {
     case 'latest_all':
       return _copyDatabase(db);
     case 'latest':
-      return _filterTimeZoneData(db, locations: _loadCommonLocations()).db;
+      return _copyDatabase(db);
     case 'latest_10y':
       final year = DateTime.now().year;
       return _filterTimeZoneData(
         db,
         dateFrom: DateTime.utc(year - 5).millisecondsSinceEpoch,
         dateTo: DateTime.utc(year + 5).millisecondsSinceEpoch,
-        locations: _loadCommonLocations(),
       ).db;
     default:
       throw ArgumentError.value(
@@ -202,19 +199,13 @@ _FilteredLocationDatabase _filterTimeZoneData(
   LocationDatabase db, {
   int dateFrom = _minMillisecondsSinceEpoch,
   int dateTo = _maxMillisecondsSinceEpoch,
-  List<String> locations = const <String>[],
 }) {
   final report = _FilterReport();
   final result = LocationDatabase();
-  final locationSet = HashSet<String>.from(locations);
 
   report.originalLocationsCount = db.locations.length;
 
   for (final location in db.locations.values) {
-    if (locationSet.isNotEmpty && !locationSet.contains(location.name)) {
-      continue;
-    }
-
     final transitionsCount = location.transitionAt.length;
     report.originalTransitionsCount += transitionsCount;
 
@@ -263,23 +254,6 @@ _FilteredLocationDatabase _filterTimeZoneData(
   }
 
   return _FilteredLocationDatabase(result, report);
-}
-
-List<String> _loadCommonLocations() {
-  final file = File(
-    '$_defaultReferenceDir${Platform.pathSeparator}lib'
-    '${Platform.pathSeparator}src${Platform.pathSeparator}'
-    'common_locations.dart',
-  );
-  if (!file.existsSync()) {
-    return const <String>[];
-  }
-
-  final content = file.readAsStringSync();
-  return RegExp("'([^']+)'")
-      .allMatches(content)
-      .map((match) => match.group(1)!)
-      .toList(growable: false);
 }
 
 String _renderDatabase(
@@ -373,10 +347,10 @@ String _quote(String value) {
 
 void _printUsage() {
   stdout.writeln('''
-Generate lib/src/dependencies/timezone/src/pg_timezone_data.dart.
+Generate a Dart timezone database file for dpgsql.
 
 Default source:
-  referencias/timezone/lib/data/latest_all.tzf
+  scripts/data/latest_10y.tzf
 
 Usage:
   dart run scripts/generate_pg_timezone_data.dart [options]
@@ -385,8 +359,6 @@ Options:
   --input <file>          Read a local .tzf file.
   --output <file>         Output Dart file.
                           Default: $_defaultOutput
-  --reference-dir <dir>   Local timezone package reference directory.
-                          Default: $_defaultReferenceDir
   --scope <name>          latest_all, latest, or latest_10y.
                           Default: $_defaultScope
   --download              Download a precompiled .tzf before generating.
@@ -402,8 +374,10 @@ Options:
   -h, --help              Show this help.
 
 Notes:
-  The default path reads the vendored .tzf file for reproducible fast refreshes.
-  Use --download-iana to avoid zic and package:timezone completely: the script
+  The default path reads scripts/data/latest_10y.tzf for a compact database.
+  Generate pg_timezone_data_all.dart with --scope latest_all when full
+  historical IANA coverage is required. Use
+  --download-iana to avoid zic and package:timezone completely: the script
   downloads the IANA text files, decodes Rule/Zone/Link records in Dart, and
   writes the generated Dart database used by dpgsql at runtime.
 ''');
@@ -1243,7 +1217,6 @@ final class _Options {
   _Options({
     required this.inputPath,
     required this.outputPath,
-    required this.referenceDir,
     required this.scope,
     required this.downloadTzf,
     required this.downloadUrl,
@@ -1258,7 +1231,6 @@ final class _Options {
 
   final String? inputPath;
   final String outputPath;
-  final String referenceDir;
   final String scope;
   final bool downloadTzf;
   final String? downloadUrl;
@@ -1285,13 +1257,12 @@ final class _Options {
     if (downloadTzf) {
       return downloadUrl ?? '$_defaultTzfDownloadBase/${_scopeFilename(scope)}';
     }
-    return 'reference $referenceDir/lib/data/${_scopeFilename(scope)}';
+    return 'reference $_defaultTzfDir/${_scopeFilename(scope)}';
   }
 
   factory _Options.parse(List<String> args) {
     String? inputPath;
     var outputPath = _defaultOutput;
-    var referenceDir = _defaultReferenceDir;
     var scope = _defaultScope;
     var downloadTzf = false;
     String? downloadUrl;
@@ -1316,9 +1287,6 @@ final class _Options {
           break;
         case '--output':
           outputPath = _readValue(args, ++i, arg);
-          break;
-        case '--reference-dir':
-          referenceDir = _readValue(args, ++i, arg);
           break;
         case '--scope':
           scope = _readValue(args, ++i, arg);
@@ -1363,7 +1331,6 @@ final class _Options {
     return _Options(
       inputPath: inputPath,
       outputPath: outputPath,
-      referenceDir: referenceDir,
       scope: scope,
       downloadTzf: downloadTzf,
       downloadUrl: downloadUrl,

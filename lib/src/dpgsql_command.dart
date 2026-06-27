@@ -118,6 +118,23 @@ class DpgsqlCommand {
     );
   }
 
+  Future<Object?> executeScalar() async {
+    if (connection == null || connection!.state != ConnectionState.open) {
+      throw StateError('Connection must be open');
+    }
+    if (connection!.inPipelineMode) {
+      throw StateError('executeScalar cannot be used while in pipeline mode');
+    }
+
+    final plan = buildExecutionPlan();
+    return connection!.executeScalar(
+      plan.sql,
+      parameters: plan.parameters,
+      statementName: plan.statementName,
+      rewriteParameters: plan.rewriteParameters,
+    );
+  }
+
   Future<List<Map<String, dynamic>>> executeMaps({
     PgResultMode resultMode = PgResultMode.typed,
   }) async {

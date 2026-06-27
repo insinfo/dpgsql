@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 
 import 'ssl_mode.dart';
+import 'timezone_database_scope.dart';
 import 'timezone_settings.dart';
 import 'utils/codecs/big5.dart' as dpgsql_big5;
 import 'utils/codecs/dos.dart' as dpgsql_dos;
@@ -68,6 +69,19 @@ class DpgsqlConnectionStringBuilder {
         'Use Pg Time Zone Database',
         'UsePgTimeZoneDatabase',
       ),
+      ianaTimeZoneDatabaseScope: parsePgTimeZoneDatabaseScope(
+        _get(
+              'IANA Time Zone Database Scope',
+              'IanaTimeZoneDatabaseScope',
+              'Pg Time Zone Database Scope',
+            ) ??
+            _get(
+              'PgTimeZoneDatabaseScope',
+              'Time Zone Database Scope',
+              'TimeZoneDatabaseScope',
+            ) ??
+            'latest_all',
+      ),
       throwOnDateTimeInfinity: _getBool(
         false,
         'Throw On DateTime Infinity',
@@ -90,6 +104,8 @@ class DpgsqlConnectionStringBuilder {
         value.useCurrentOffsetForLocalTimestamp.toString();
     _parameters['Use IANA Time Zone Database'] =
         value.useIanaTimeZoneDatabase.toString();
+    _parameters['IANA Time Zone Database Scope'] =
+        pgTimeZoneDatabaseScopeName(value.ianaTimeZoneDatabaseScope);
     _parameters['Throw On DateTime Infinity'] =
         value.throwOnDateTimeInfinity.toString();
   }

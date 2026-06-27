@@ -16,9 +16,9 @@
 - Added `PgResultMode.rawText` for PHP-style `String`/`null` result access and raw text map benchmarks.
 - Added `DpgsqlCommand.forEachPgRow()` for streaming transient lazy row views without result-list materialization.
 - Added configurable `TimeZoneSettings` for UTC/default and local timestamp/date decoding, including pooled session restore for `TimeZone` and `client_encoding`.
-- Added opt-in vendored PostgreSQL/IANA timezone support for named `timestamptz` decoding without adding external runtime dependencies.
+- Added opt-in vendored PostgreSQL/IANA timezone support for named `timestamptz` decoding without adding external runtime dependencies, with `latest_all` as the robust default and `IANA Time Zone Database Scope=latest_10y` as the compact runtime option.
 - Added nullable PostgreSQL date/time infinity handling by default, with `Throw On DateTime Infinity=true` for strict behavior.
-- Added a pure Dart IANA timezone generator that parses `Rule`, `Zone`, and `Link` records without `zic.c` or `package:timezone`; local `.tzf` generation remains available for comparison, and the runtime-facing `latest.tzf` default filename was removed.
+- Added a pure Dart IANA timezone generator that parses `Rule`, `Zone`, and `Link` records without `zic.c`, `package:timezone`, or external reference directories; both `latest_all` and compact `latest_10y` generated databases are supported, and the runtime-facing `latest.tzf` default filename was removed.
 - Moved Dart package-driver benchmark dependencies to `benchmarks/pubspec.yaml` so the main package stays free of benchmark transitive dependencies.
 - Added `result_sets_maps` benchmark coverage for `Map<String, dynamic>` row materialization.
 - Added PHP associative-map benchmark coverage and 3000-row result-set scenarios.

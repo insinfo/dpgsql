@@ -11,6 +11,7 @@ export 'src/dpgsql_connection_string_builder.dart';
 export 'src/ssl_mode.dart';
 export 'src/isolation_level.dart';
 export 'src/timezone_settings.dart';
+export 'src/timezone_database_scope.dart';
 export 'src/pg_result_mode.dart';
 export 'src/dpgsql_db_type.dart';
 export 'src/dpgsql_connection.dart';

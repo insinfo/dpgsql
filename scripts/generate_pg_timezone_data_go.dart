@@ -7,7 +7,7 @@ const String zoneinfoUrl =
     'https://raw.githubusercontent.com/golang/go/master/lib/time/zoneinfo.zip';
 
 const String _defaultOutput =
-    'lib/src/dependencies/timezone/src/pg_timezone_data.dart';
+    'lib/src/utils/pg_timezone/timezone/pg_timezone_data_10y.dart';
 
 // --- Modelos Internos para a Geração ---
 class ParsedTimeZone {
@@ -40,7 +40,8 @@ Future<void> main(List<String> args) async {
   stdout.writeln('Baixando banco de dados IANA (zoneinfo) mais recente...');
   final zipBytes = await _download(zoneinfoUrl);
 
-  stdout.writeln('Extraindo e decodificando formato binário TZif nativamente...');
+  stdout
+      .writeln('Extraindo e decodificando formato binário TZif nativamente...');
   final files = _extractZip(zipBytes);
 
   final locations = <ParsedLocation>[];
@@ -137,12 +138,14 @@ Map<String, Uint8List> _extractZip(Uint8List zipData) {
           zipData.sublist(dataOffset, dataOffset + compressedSize);
 
       Uint8List? uncompressedData;
-      if (compression == 0) { // STORE (Sem compressão)
+      if (compression == 0) {
+        // STORE (Sem compressão)
         uncompressedData = compressedData;
-      } else if (compression == 8) { // DEFLATE
+      } else if (compression == 8) {
+        // DEFLATE
         // ZLibDecoder(raw: true) decodifica fluxos Deflate nativos no Dart
-        uncompressedData = Uint8List.fromList(
-            ZLibDecoder(raw: true).convert(compressedData));
+        uncompressedData =
+            Uint8List.fromList(ZLibDecoder(raw: true).convert(compressedData));
       }
 
       if (uncompressedData != null && uncompressedData.length > 4) {
@@ -188,12 +191,18 @@ ParsedLocation _parseTzif(String name, Uint8List data) {
 
   if (useV2) {
     offset = v1End + 20;
-    tzh_ttisgmtcnt = buffer.getInt32(offset); offset += 4;
-    tzh_ttisstdcnt = buffer.getInt32(offset); offset += 4;
-    tzh_leapcnt = buffer.getInt32(offset); offset += 4;
-    tzh_timecnt = buffer.getInt32(offset); offset += 4;
-    tzh_typecnt = buffer.getInt32(offset); offset += 4;
-    tzh_charcnt = buffer.getInt32(offset); offset += 4;
+    tzh_ttisgmtcnt = buffer.getInt32(offset);
+    offset += 4;
+    tzh_ttisstdcnt = buffer.getInt32(offset);
+    offset += 4;
+    tzh_leapcnt = buffer.getInt32(offset);
+    offset += 4;
+    tzh_timecnt = buffer.getInt32(offset);
+    offset += 4;
+    tzh_typecnt = buffer.getInt32(offset);
+    offset += 4;
+    tzh_charcnt = buffer.getInt32(offset);
+    offset += 4;
   } else {
     offset = 44;
   }
@@ -219,13 +228,16 @@ ParsedLocation _parseTzif(String name, Uint8List data) {
   List<int> ttisdst = [];
   List<int> tznameIndex = [];
   for (int i = 0; i < tzh_typecnt; i++) {
-    ttisgmtoff.add(buffer.getInt32(offset)); offset += 4;
-    ttisdst.add(buffer.getUint8(offset)); offset += 1;
-    tznameIndex.add(buffer.getUint8(offset)); offset += 1;
+    ttisgmtoff.add(buffer.getInt32(offset));
+    offset += 4;
+    ttisdst.add(buffer.getUint8(offset));
+    offset += 1;
+    tznameIndex.add(buffer.getUint8(offset));
+    offset += 1;
   }
 
-  String chars = String.fromCharCodes(
-      data.sublist(offset, offset + tzh_charcnt));
+  String chars =
+      String.fromCharCodes(data.sublist(offset, offset + tzh_charcnt));
 
   int defaultZone = 0;
   for (int i = 0; i < tzh_typecnt; i++) {

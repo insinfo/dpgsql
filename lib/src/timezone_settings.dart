@@ -1,3 +1,5 @@
+import 'timezone_database_scope.dart';
+
 /// Configures how PostgreSQL date/time values are decoded to Dart [DateTime].
 ///
 /// The defaults match `postgres`, `postgresql-fork`, and `dargres`: date,
@@ -12,6 +14,7 @@ class TimeZoneSettings {
     this.forceDecodeDateAsUTC = true,
     this.useCurrentOffsetForLocalTimestamp = true,
     this.useIanaTimeZoneDatabase = false,
+    this.ianaTimeZoneDatabaseScope = PgTimeZoneDatabaseScope.latestAll,
     this.throwOnDateTimeInfinity = false,
   });
 
@@ -22,6 +25,7 @@ class TimeZoneSettings {
         forceDecodeDateAsUTC = true,
         useCurrentOffsetForLocalTimestamp = true,
         useIanaTimeZoneDatabase = false,
+        ianaTimeZoneDatabaseScope = PgTimeZoneDatabaseScope.latestAll,
         throwOnDateTimeInfinity = false;
 
   /// PostgreSQL session time zone name. Sent as the `TimeZone` startup
@@ -49,6 +53,11 @@ class TimeZoneSettings {
   /// that only set the PostgreSQL session `TimeZone` do not pay this behavior.
   final bool useIanaTimeZoneDatabase;
 
+  /// Selects the vendored IANA database scope used when
+  /// [useIanaTimeZoneDatabase] is true. Full history is the default so dates
+  /// such as year 2000 decode with historical DST rules.
+  final PgTimeZoneDatabaseScope ianaTimeZoneDatabaseScope;
+
   /// If true, throw when PostgreSQL returns `date`, `timestamp`, or
   /// `timestamptz` infinity sentinels. Defaults to false, matching
   /// `postgresql-fork`/`dargres` compatibility by exposing infinity as null
@@ -62,6 +71,7 @@ class TimeZoneSettings {
     bool? forceDecodeDateAsUTC,
     bool? useCurrentOffsetForLocalTimestamp,
     bool? useIanaTimeZoneDatabase,
+    PgTimeZoneDatabaseScope? ianaTimeZoneDatabaseScope,
     bool? throwOnDateTimeInfinity,
   }) {
     return TimeZoneSettings(
@@ -75,6 +85,8 @@ class TimeZoneSettings {
           this.useCurrentOffsetForLocalTimestamp,
       useIanaTimeZoneDatabase:
           useIanaTimeZoneDatabase ?? this.useIanaTimeZoneDatabase,
+      ianaTimeZoneDatabaseScope:
+          ianaTimeZoneDatabaseScope ?? this.ianaTimeZoneDatabaseScope,
       throwOnDateTimeInfinity:
           throwOnDateTimeInfinity ?? this.throwOnDateTimeInfinity,
     );
