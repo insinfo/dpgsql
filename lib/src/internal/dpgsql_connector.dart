@@ -177,7 +177,12 @@ class DpgsqlConnector {
       }
 
       // 2. Initialize Buffers
-      _readBuffer = SocketBinaryInput(inputStream);
+      _readBuffer = SocketBinaryInput(
+        inputStream,
+        onClosed: () {
+          _isConnected = false;
+        },
+      );
       _writeBuffer = SocketBinaryOutput(_socket!);
 
       // Readers/Writers helpers

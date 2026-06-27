@@ -6,6 +6,12 @@ A high-performance PostgreSQL driver for Dart, implemented directly on top of th
 
 `dpgsql` is intended for server-side Dart applications that need predictable behavior under long-running production workloads: connection pooling, prepared statements, binary I/O, pipeline mode, COPY support, notifications, SSL, and real PostgreSQL integration tests.
 
+## Support My Work
+
+[!["Buy Me A Coffee"](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/isaqueneves)
+
+I'm on Buy Me a Coffee. If this driver helps your project, you can buy me a coffee and share your thoughts: [buy me a coffee](https://www.buymeacoffee.com/isaqueneves).
+
 ## Status
 
 The driver is usable for basic and intermediate PostgreSQL workloads and is actively being hardened for production. The public API now uses the `Dpgsql*` prefix.

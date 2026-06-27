@@ -1,6 +1,7 @@
 /// Custom types for Dpgsql Dart port.
 /// These types provide raw access to PostgreSQL values without lossy conversion.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:meta/meta.dart';
@@ -392,6 +393,8 @@ class DpgsqlUuid {
         '${value.substring(16, 20)}-'
         '${value.substring(20)}';
   }
+
+  String toJson() => toString();
 }
 
 /// Represents PostgreSQL bit/varbit values.
@@ -429,6 +432,191 @@ class DpgsqlBitString {
 
   @override
   String toString() => value;
+
+  String toJson() => value;
+}
+
+/// Represents PostgreSQL inet values.
+///
+/// PostgreSQL binary format stores address family, prefix length and raw IP
+/// bytes. The public representation keeps the textual address and optional
+/// prefix so maps can still serialize cleanly through [toJson].
+@immutable
+class DpgsqlInet {
+  DpgsqlInet(String address, {int? prefixLength})
+      : address = _normalizeAddress(address),
+        prefixLength = _validatePrefix(address, prefixLength);
+
+  factory DpgsqlInet.parse(String value) {
+    final (address, prefixLength) = _splitAddressAndPrefix(value);
+    return DpgsqlInet(address, prefixLength: prefixLength);
+  }
+
+  final String address;
+  final int? prefixLength;
+
+  bool get isIPv4 => !_isIPv6Address(address);
+
+  int get addressBits => isIPv4 ? 32 : 128;
+
+  int get effectivePrefixLength => prefixLength ?? addressBits;
+
+  Uint8List toBytes() {
+    final parsed = InternetAddress.tryParse(address);
+    if (parsed == null) {
+      throw FormatException('Invalid IP address', address);
+    }
+    return Uint8List.fromList(parsed.rawAddress);
+  }
+
+  static String _normalizeAddress(String address) {
+    final value = address.trim();
+    final parsed = InternetAddress.tryParse(value);
+    if (parsed == null) {
+      throw FormatException('Invalid IP address', address);
+    }
+    return parsed.address;
+  }
+
+  static int? _validatePrefix(String address, int? prefixLength) {
+    if (prefixLength == null) {
+      return null;
+    }
+    final maxBits = _isIPv6Address(address) ? 128 : 32;
+    if (prefixLength < 0 || prefixLength > maxBits) {
+      throw RangeError.range(prefixLength, 0, maxBits, 'prefixLength');
+    }
+    return prefixLength;
+  }
+
+  static (String, int?) _splitAddressAndPrefix(String value) {
+    final text = value.trim();
+    final slash = text.indexOf('/');
+    if (slash < 0) {
+      return (text, null);
+    }
+    return (
+      text.substring(0, slash),
+      int.parse(text.substring(slash + 1)),
+    );
+  }
+
+  static bool _isIPv6Address(String address) => address.contains(':');
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is DpgsqlInet &&
+          address == other.address &&
+          effectivePrefixLength == other.effectivePrefixLength;
+
+  @override
+  int get hashCode => Object.hash(address, effectivePrefixLength);
+
+  @override
+  String toString() {
+    final prefix = prefixLength;
+    if (prefix == null || prefix == addressBits) {
+      return address;
+    }
+    return '$address/$prefix';
+  }
+
+  String toJson() => toString();
+}
+
+/// Represents PostgreSQL cidr values.
+@immutable
+class DpgsqlCidr extends DpgsqlInet {
+  DpgsqlCidr(super.address, {required int prefixLength})
+      : super(prefixLength: prefixLength);
+
+  factory DpgsqlCidr.parse(String value) {
+    final inet = DpgsqlInet.parse(value);
+    return DpgsqlCidr(
+      inet.address,
+      prefixLength: inet.prefixLength ?? inet.addressBits,
+    );
+  }
+}
+
+/// Represents PostgreSQL macaddr/macaddr8 values.
+@immutable
+class DpgsqlMacAddress {
+  DpgsqlMacAddress(List<int> bytes)
+      : _bytes = Uint8List.fromList(_validateBytes(bytes));
+
+  factory DpgsqlMacAddress.parse(String value) {
+    final text = value.trim().toLowerCase().replaceAll('-', ':');
+    final parts = text.contains(':') ? text.split(':') : _splitHexPairs(text);
+    if (parts.length != 6 && parts.length != 8) {
+      throw FormatException('Invalid MAC address length', value);
+    }
+
+    final bytes = Uint8List(parts.length);
+    for (var i = 0; i < parts.length; i++) {
+      final part = parts[i];
+      if (part.length != 2) {
+        throw FormatException('Invalid MAC address segment', value);
+      }
+      bytes[i] = int.parse(part, radix: 16);
+    }
+    return DpgsqlMacAddress(bytes);
+  }
+
+  final Uint8List _bytes;
+
+  int get length => _bytes.length;
+
+  Uint8List toBytes() => Uint8List.fromList(_bytes);
+
+  static List<String> _splitHexPairs(String value) {
+    if (value.length.isOdd) {
+      throw FormatException('Invalid MAC address length', value);
+    }
+    final parts = <String>[];
+    for (var i = 0; i < value.length; i += 2) {
+      parts.add(value.substring(i, i + 2));
+    }
+    return parts;
+  }
+
+  static List<int> _validateBytes(List<int> bytes) {
+    if (bytes.length != 6 && bytes.length != 8) {
+      throw FormatException('MAC address must contain 6 or 8 bytes');
+    }
+    for (final byte in bytes) {
+      if (byte < 0 || byte > 255) {
+        throw RangeError.range(byte, 0, 255, 'byte');
+      }
+    }
+    return bytes;
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    if (other is! DpgsqlMacAddress || other.length != length) return false;
+    for (var i = 0; i < length; i++) {
+      if (_bytes[i] != other._bytes[i]) return false;
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode {
+    var hash = 17;
+    for (final byte in _bytes) {
+      hash = (hash * 31) ^ byte;
+    }
+    return hash;
+  }
+
+  @override
+  String toString() =>
+      _bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join(':');
+
+  String toJson() => toString();
 }
 
 /// Represents a PostgreSQL Numeric/Decimal type.

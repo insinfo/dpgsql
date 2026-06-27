@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
 import '../dpgsql_db_type.dart';
@@ -408,6 +409,103 @@ class BitStringHandler extends TypeHandler<dynamic> {
   }
 }
 
+class InetHandler extends TypeHandler<dynamic> {
+  const InetHandler(this.oid);
+
+  @override
+  final int oid;
+
+  bool get _isCidr => oid == Oid.cidr;
+
+  @override
+  DpgsqlInet read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      final text = encoding.decode(buffer);
+      return _isCidr ? DpgsqlCidr.parse(text) : DpgsqlInet.parse(text);
+    }
+    if (buffer.length < 4) {
+      throw FormatException('Invalid inet/cidr length: ${buffer.length}');
+    }
+
+    final family = buffer[0];
+    final prefixLength = buffer[1];
+    final addressLength = buffer[3];
+    if (buffer.length != 4 + addressLength) {
+      throw FormatException(
+          'Invalid inet/cidr payload length: ${buffer.length}');
+    }
+
+    final addressBytes = Uint8List.sublistView(buffer, 4);
+    final address = switch (family) {
+      2 => InternetAddress.fromRawAddress(
+          addressBytes,
+          type: InternetAddressType.IPv4,
+        ).address,
+      3 => InternetAddress.fromRawAddress(
+          addressBytes,
+          type: InternetAddressType.IPv6,
+        ).address,
+      _ => throw FormatException('Invalid inet/cidr address family: $family'),
+    };
+
+    return _isCidr
+        ? DpgsqlCidr(address, prefixLength: prefixLength)
+        : DpgsqlInet(address, prefixLength: prefixLength);
+  }
+
+  @override
+  Uint8List write(dynamic value, {Encoding encoding = utf8}) {
+    final inet = value is DpgsqlInet
+        ? value
+        : (_isCidr
+            ? DpgsqlCidr.parse(value.toString())
+            : DpgsqlInet.parse(value.toString()));
+    final addressBytes = inet.toBytes();
+    final output = Uint8List(4 + addressBytes.length);
+    output[0] = addressBytes.length == 4 ? 2 : 3;
+    output[1] = inet.effectivePrefixLength;
+    output[2] = _isCidr ? 1 : 0;
+    output[3] = addressBytes.length;
+    output.setRange(4, output.length, addressBytes);
+    return output;
+  }
+}
+
+class MacAddressHandler extends TypeHandler<dynamic> {
+  const MacAddressHandler(this.oid);
+
+  @override
+  final int oid;
+
+  int get _expectedLength => oid == Oid.macaddr8 ? 8 : 6;
+
+  @override
+  DpgsqlMacAddress read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) {
+      return DpgsqlMacAddress.parse(encoding.decode(buffer));
+    }
+    if (buffer.length != _expectedLength) {
+      throw FormatException('Invalid macaddr payload length: ${buffer.length}');
+    }
+    return DpgsqlMacAddress(buffer);
+  }
+
+  @override
+  Uint8List write(dynamic value, {Encoding encoding = utf8}) {
+    final mac = value is DpgsqlMacAddress
+        ? value
+        : DpgsqlMacAddress.parse(value.toString());
+    if (mac.length != _expectedLength) {
+      throw FormatException(
+        'Expected $_expectedLength bytes for ${oid == Oid.macaddr8 ? 'macaddr8' : 'macaddr'}',
+      );
+    }
+    return mac.toBytes();
+  }
+}
+
 class ArrayHandler<E> extends TypeHandler<List<E>> {
   ArrayHandler(this.oid, this.elementHandler);
 
@@ -644,6 +742,10 @@ class TypeHandlerRegistry {
     register(const UuidHandler());
     register(const BitStringHandler(Oid.bit));
     register(const BitStringHandler(Oid.varbit));
+    register(const InetHandler(Oid.inet));
+    register(const InetHandler(Oid.cidr));
+    register(const MacAddressHandler(Oid.macaddr));
+    register(const MacAddressHandler(Oid.macaddr8));
 
     if (useDpgsqlTypes) {
       register(const DpgsqlDateHandler());
@@ -717,6 +819,11 @@ class TypeHandlerRegistry {
     if (value is Uint8List) return _oidHandlers[Oid.bytea];
     if (value is DpgsqlUuid) return _oidHandlers[Oid.uuid];
     if (value is DpgsqlBitString) return _oidHandlers[Oid.varbit];
+    if (value is DpgsqlCidr) return _oidHandlers[Oid.cidr];
+    if (value is DpgsqlInet) return _oidHandlers[Oid.inet];
+    if (value is DpgsqlMacAddress) {
+      return _oidHandlers[value.length == 8 ? Oid.macaddr8 : Oid.macaddr];
+    }
 
     // Dpgsql Types
     if (value is DpgsqlDate) return _oidHandlers[Oid.date];
@@ -764,6 +871,11 @@ class TypeHandlerRegistry {
     if (T == DpgsqlUuid) return _oidHandlers[Oid.uuid] as TypeHandler<T>?;
     if (T == DpgsqlBitString)
       return _oidHandlers[Oid.varbit] as TypeHandler<T>?;
+    if (T == DpgsqlInet) return _oidHandlers[Oid.inet] as TypeHandler<T>?;
+    if (T == DpgsqlCidr) return _oidHandlers[Oid.cidr] as TypeHandler<T>?;
+    if (T == DpgsqlMacAddress) {
+      return _oidHandlers[Oid.macaddr] as TypeHandler<T>?;
+    }
 
     if (T == DpgsqlDate) return _oidHandlers[Oid.date] as TypeHandler<T>?;
     if (T == DpgsqlTime) return _oidHandlers[Oid.time] as TypeHandler<T>?;
@@ -835,6 +947,14 @@ class TypeHandlerRegistry {
         return _oidHandlers[Oid.json];
       case DpgsqlDbType.jsonb:
         return _oidHandlers[Oid.jsonb];
+      case DpgsqlDbType.inet:
+        return _oidHandlers[Oid.inet];
+      case DpgsqlDbType.cidr:
+        return _oidHandlers[Oid.cidr];
+      case DpgsqlDbType.macaddr:
+        return _oidHandlers[Oid.macaddr];
+      case DpgsqlDbType.macaddr8:
+        return _oidHandlers[Oid.macaddr8];
       case DpgsqlDbType.line:
         return _oidHandlers[Oid.line];
       case DpgsqlDbType.lSeg:

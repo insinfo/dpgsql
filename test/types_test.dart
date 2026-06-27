@@ -136,6 +136,57 @@ void main() {
     });
   });
 
+  group('Network address types', () {
+    test('DpgsqlInet and DpgsqlCidr parse and format addresses', () {
+      expect(DpgsqlInet.parse('192.168.0.10').toString(), '192.168.0.10');
+      expect(DpgsqlInet.parse('192.168.0.0/24').toString(), '192.168.0.0/24');
+      expect(DpgsqlCidr.parse('10.0.0.0/8').toString(), '10.0.0.0/8');
+      expect(DpgsqlInet.parse('2001:db8::1').toJson(), contains('2001:db8'));
+    });
+
+    test('InetHandler reads and writes PostgreSQL binary format', () {
+      const handler = InetHandler(0);
+      final bytes = handler.write(DpgsqlInet.parse('192.168.0.10'));
+
+      expect(bytes, orderedEquals(<int>[2, 32, 0, 4, 192, 168, 0, 10]));
+      expect(handler.read(bytes), DpgsqlInet.parse('192.168.0.10'));
+      expect(
+        handler.read(Uint8List.fromList('192.168.0.0/24'.codeUnits),
+            isText: true),
+        DpgsqlInet.parse('192.168.0.0/24'),
+      );
+    });
+
+    test('MacAddressHandler reads and writes binary format', () {
+      const handler = MacAddressHandler(0);
+      final mac = DpgsqlMacAddress.parse('08:00:2b:01:02:03');
+      final bytes = handler.write(mac);
+
+      expect(bytes, orderedEquals(<int>[8, 0, 43, 1, 2, 3]));
+      expect(handler.read(bytes), mac);
+      expect(mac.toJson(), '08:00:2b:01:02:03');
+    });
+
+    test('TypeHandlerRegistry resolves network handlers', () {
+      final registry = TypeHandlerRegistry();
+
+      expect(registry.resolveByValue(DpgsqlInet.parse('127.0.0.1')),
+          isA<InetHandler>());
+      expect(registry.resolveByValue(DpgsqlCidr.parse('10.0.0.0/8')),
+          isA<InetHandler>());
+      expect(registry.resolveByValue(DpgsqlMacAddress.parse('08002b010203')),
+          isA<MacAddressHandler>());
+      expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.inet),
+          isA<InetHandler>());
+      expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.cidr),
+          isA<InetHandler>());
+      expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.macaddr),
+          isA<MacAddressHandler>());
+      expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.macaddr8),
+          isA<MacAddressHandler>());
+    });
+  });
+
   group('Geometric Types', () {
     test('PointHandler', () {
       const handler = PointHandler();

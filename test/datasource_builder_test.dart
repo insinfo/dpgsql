@@ -50,6 +50,9 @@ void main() {
         isA<DpgsqlDataSourceBuilder>());
     expect(factory.createSlimDataSourceBuilder('Host=localhost'),
         isA<DpgsqlSlimDataSourceBuilder>());
+    expect(factory.createCommandBuilder(), isA<DpgsqlCommandBuilder>());
+    expect(factory.createDataAdapter(), isA<DpgsqlDataAdapter>());
+    expect(factory.createMetricsOptions(), isA<DpgsqlMetricsOptions>());
   });
 
   test('DpgsqlDataSource exposes static creation helpers', () {

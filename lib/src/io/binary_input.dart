@@ -41,7 +41,9 @@ class SocketBinaryInput implements BinaryInput {
   SocketBinaryInput(
     Stream<List<int>> stream, {
     int initialCapacity = 4096,
-  }) : _buffer = Uint8ListPool.rent(initialCapacity) {
+    void Function()? onClosed,
+  })  : _buffer = Uint8ListPool.rent(initialCapacity),
+        _onClosed = onClosed {
     _dataView = ByteData.view(_buffer.buffer);
     stream.listen(
       _onData,
@@ -62,6 +64,7 @@ class SocketBinaryInput implements BinaryInput {
   Object? _error;
   StackTrace? _errorStackTrace;
   Completer<void>? _waitCompleter;
+  final void Function()? _onClosed;
 
   int get _available => _writeLength - _readOffset;
 
@@ -76,12 +79,14 @@ class SocketBinaryInput implements BinaryInput {
 
   void _onDone() {
     _done = true;
+    _onClosed?.call();
     _waitCompleter?..complete();
     _waitCompleter = null;
   }
 
   void _onError(Object error, StackTrace stackTrace) {
     _done = true;
+    _onClosed?.call();
     _error = error;
     _errorStackTrace = stackTrace;
     _waitCompleter?.completeError(error, stackTrace);

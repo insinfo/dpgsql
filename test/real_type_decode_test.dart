@@ -117,6 +117,57 @@ SELECT
     }
   });
 
+  test('real connection decodes inet, cidr and macaddr types', () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      final reader = await conn.createCommand('''
+SELECT
+  '192.168.10.5'::inet,
+  '10.0.0.0/8'::cidr,
+  '08:00:2b:01:02:03'::macaddr
+''').executeReader();
+
+      try {
+        expect(await reader.read(), isTrue);
+        expect(reader.getValue(0), DpgsqlInet.parse('192.168.10.5'));
+        expect(reader.getValue(1), DpgsqlCidr.parse('10.0.0.0/8'));
+        expect(
+          reader.getValue(2),
+          DpgsqlMacAddress.parse('08:00:2b:01:02:03'),
+        );
+        expect(await reader.read(), isFalse);
+      } finally {
+        await reader.close();
+      }
+
+      final command = conn.createCommand('''
+SELECT
+  @ip_value::inet,
+  @network_value::cidr,
+  @mac_value::macaddr
+''');
+      command.parameters.add(DpgsqlParameter('ip_value', '172.16.1.20')
+        ..dpgsqlDbType = DpgsqlDbType.inet);
+      command.parameters.add(
+        DpgsqlParameter('network_value', DpgsqlCidr.parse('172.16.0.0/12'))
+          ..dpgsqlDbType = DpgsqlDbType.cidr,
+      );
+      command.parameters.add(
+        DpgsqlParameter('mac_value', DpgsqlMacAddress.parse('08002b010203'))
+          ..dpgsqlDbType = DpgsqlDbType.macaddr,
+      );
+
+      final rows = await command.executeRows();
+      expect(rows.single[0], DpgsqlInet.parse('172.16.1.20'));
+      expect(rows.single[1], DpgsqlCidr.parse('172.16.0.0/12'));
+      expect(rows.single[2], DpgsqlMacAddress.parse('08:00:2b:01:02:03'));
+    } finally {
+      await conn.close();
+    }
+  });
+
   test('executeRows materializes decoded result sets', () async {
     final conn = await openRealConnectionOrSkip();
     if (conn == null) return;

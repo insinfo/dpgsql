@@ -360,6 +360,10 @@ class DpgsqlDataSource {
     }
 
     await _restoreSessionParameters(conn, connector);
+
+    if (!await _healthCheck(connector)) {
+      throw StateError('Pooled connection failed health check after reset.');
+    }
   }
 
   Future<void> _restoreSessionParameters(

@@ -6,6 +6,7 @@ import 'dpgsql_binary_importer.dart';
 import 'dpgsql_command.dart';
 import 'dpgsql_data_reader.dart';
 import 'dpgsql_parameter_collection.dart';
+import 'dpgsql_raw_copy_stream.dart';
 import 'dpgsql_transaction.dart';
 import 'dpgsql_connection_string_builder.dart';
 import 'data/pg_row.dart';
@@ -40,6 +41,14 @@ class DpgsqlConnection {
       !hasActiveTransaction &&
       !hasActiveCopyOperation &&
       !inPipelineMode;
+
+  /// Marks the physical connector as unsafe for pool reuse.
+  ///
+  /// Use this after network/protocol failures where the backend state is not
+  /// guaranteed to be synchronized anymore.
+  void markUnusable() {
+    _discardConnectorOnClose = true;
+  }
 
   /// Creates and returns a DpgsqlCommand object associated with the current connection.
   DpgsqlCommand createCommand(String commandText) {
@@ -361,6 +370,49 @@ class DpgsqlConnection {
       _discardConnectorOnClose = true;
       rethrow;
     }
+  }
+
+  /// Starts a raw COPY operation.
+  ///
+  /// The returned stream works with COPY FROM STDIN and COPY TO STDOUT in
+  /// binary, text, or CSV format. Unlike [beginBinaryImport] and
+  /// [beginBinaryExport], no row/value encoding is performed by the driver.
+  Future<DpgsqlRawCopyStream> beginRawBinaryCopy(
+    String copyCommand, {
+    DpgsqlCopyProgressCallback? onProgress,
+  }) async {
+    if (_connector == null) throw StateError('Connection closed');
+    _activeCopyOperation = true;
+    try {
+      final stream = DpgsqlRawCopyStream(
+        _connector!,
+        copyCommand,
+        _handleCopyOperationClosed,
+        onProgress,
+      );
+      await stream.init();
+      return stream;
+    } catch (_) {
+      _activeCopyOperation = false;
+      _discardConnectorOnClose = true;
+      rethrow;
+    }
+  }
+
+  /// Starts a textual COPY FROM STDIN operation.
+  Future<DpgsqlRawCopyStream> beginTextImport(
+    String copyFromCommand, {
+    DpgsqlCopyProgressCallback? onProgress,
+  }) {
+    return beginRawBinaryCopy(copyFromCommand, onProgress: onProgress);
+  }
+
+  /// Starts a textual COPY TO STDOUT operation.
+  Future<DpgsqlRawCopyStream> beginTextExport(
+    String copyToCommand, {
+    DpgsqlCopyProgressCallback? onProgress,
+  }) {
+    return beginRawBinaryCopy(copyToCommand, onProgress: onProgress);
   }
 
   DpgsqlBatch createBatch() {

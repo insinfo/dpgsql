@@ -1,8 +1,11 @@
 import 'dpgsql_command.dart';
+import 'dpgsql_command_builder.dart';
 import 'dpgsql_connection.dart';
 import 'dpgsql_connection_string_builder.dart';
+import 'dpgsql_data_adapter.dart';
 import 'dpgsql_data_source.dart';
 import 'dpgsql_data_source_builder.dart';
+import 'dpgsql_metrics_options.dart';
 import 'dpgsql_slim_data_source_builder.dart';
 
 /// Factory for creating dpgsql public API objects.
@@ -15,6 +18,12 @@ class DpgsqlFactory {
 
   DpgsqlCommand createCommand([String commandText = '']) {
     return DpgsqlCommand(commandText);
+  }
+
+  DpgsqlCommandBuilder createCommandBuilder([
+    DpgsqlDataAdapter? adapter,
+  ]) {
+    return DpgsqlCommandBuilder(adapter);
   }
 
   DpgsqlConnection createConnection([String connectionString = '']) {
@@ -41,5 +50,15 @@ class DpgsqlFactory {
     String? connectionString,
   ]) {
     return DpgsqlSlimDataSourceBuilder(connectionString);
+  }
+
+  DpgsqlDataAdapter createDataAdapter([
+    DpgsqlCommand? selectCommand,
+  ]) {
+    return DpgsqlDataAdapter(selectCommand);
+  }
+
+  DpgsqlMetricsOptions createMetricsOptions() {
+    return const DpgsqlMetricsOptions();
   }
 }
