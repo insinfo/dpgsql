@@ -44,7 +44,6 @@ class SocketBinaryInput implements BinaryInput {
     void Function()? onClosed,
   })  : _buffer = Uint8ListPool.rent(initialCapacity),
         _onClosed = onClosed {
-    _dataView = ByteData.view(_buffer.buffer);
     stream.listen(
       _onData,
       onDone: _onDone,
@@ -54,7 +53,6 @@ class SocketBinaryInput implements BinaryInput {
   }
 
   Uint8List _buffer;
-  late ByteData _dataView;
   int _readOffset = 0;
   int _writeLength = 0;
 
@@ -138,7 +136,6 @@ class SocketBinaryInput implements BinaryInput {
 
     final oldBuffer = _buffer;
     _buffer = newBuffer;
-    _dataView = ByteData.view(_buffer.buffer);
     _readOffset = 0;
     _writeLength = unread + data.length;
     Uint8ListPool.release(oldBuffer);
@@ -198,32 +195,36 @@ class SocketBinaryInput implements BinaryInput {
 
   @override
   int readInt16() {
-    final offset = _consumeOffset(2);
-    return _dataView.getInt16(offset, Endian.big);
+    final value = readUint16();
+    return (value & 0x8000) == 0 ? value : value - 0x10000;
   }
 
   @override
   int readUint16() {
     final offset = _consumeOffset(2);
-    return _dataView.getUint16(offset, Endian.big);
+    return (_buffer[offset] << 8) | _buffer[offset + 1];
   }
 
   @override
   int readInt32() {
-    final offset = _consumeOffset(4);
-    return _dataView.getInt32(offset, Endian.big);
+    final value = readUint32();
+    return (value & 0x80000000) == 0 ? value : value - 0x100000000;
   }
 
   @override
   int readUint32() {
     final offset = _consumeOffset(4);
-    return _dataView.getUint32(offset, Endian.big);
+    return (_buffer[offset] << 24) |
+        (_buffer[offset + 1] << 16) |
+        (_buffer[offset + 2] << 8) |
+        _buffer[offset + 3];
   }
 
   @override
   int readInt64() {
-    final offset = _consumeOffset(8);
-    return _dataView.getInt64(offset, Endian.big);
+    final high = readInt32();
+    final low = readUint32();
+    return high * 0x100000000 + low;
   }
 
   @override
@@ -244,7 +245,6 @@ class SocketBinaryInput implements BinaryInput {
     _disposed = true;
     Uint8ListPool.release(_buffer);
     _buffer = Uint8List(0);
-    _dataView = ByteData(0);
     _readOffset = 0;
     _writeLength = 0;
   }
@@ -283,42 +283,40 @@ class MemoryBinaryInput implements BinaryInput {
 
   @override
   int readInt16() {
-    _ensureSync(2);
-    final bd = ByteData.sublistView(_buffer, _offset, _offset + 2);
-    _offset += 2;
-    return bd.getInt16(0, Endian.big);
+    final value = readUint16();
+    return (value & 0x8000) == 0 ? value : value - 0x10000;
   }
 
   @override
   int readUint16() {
     _ensureSync(2);
-    final bd = ByteData.sublistView(_buffer, _offset, _offset + 2);
+    final value = (_buffer[_offset] << 8) | _buffer[_offset + 1];
     _offset += 2;
-    return bd.getUint16(0, Endian.big);
+    return value;
   }
 
   @override
   int readInt32() {
-    _ensureSync(4);
-    final bd = ByteData.sublistView(_buffer, _offset, _offset + 4);
-    _offset += 4;
-    return bd.getInt32(0, Endian.big);
+    final value = readUint32();
+    return (value & 0x80000000) == 0 ? value : value - 0x100000000;
   }
 
   @override
   int readUint32() {
     _ensureSync(4);
-    final bd = ByteData.sublistView(_buffer, _offset, _offset + 4);
+    final value = (_buffer[_offset] << 24) |
+        (_buffer[_offset + 1] << 16) |
+        (_buffer[_offset + 2] << 8) |
+        _buffer[_offset + 3];
     _offset += 4;
-    return bd.getUint32(0, Endian.big);
+    return value;
   }
 
   @override
   int readInt64() {
-    _ensureSync(8);
-    final bd = ByteData.sublistView(_buffer, _offset, _offset + 8);
-    _offset += 8;
-    return bd.getInt64(0, Endian.big);
+    final high = readInt32();
+    final low = readUint32();
+    return high * 0x100000000 + low;
   }
 
   @override

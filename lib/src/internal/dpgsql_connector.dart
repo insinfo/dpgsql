@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
@@ -52,6 +53,7 @@ class DpgsqlConnector {
     bool decodeUuidAsString = true,
     bool decodeJsonAsString = false,
     this.inferStringParametersAsUnknown = true,
+    this.useExtendedQueryForUnparameterizedCommands = false,
   })  : timeZone = timeZone ?? const TimeZoneSettings.utc(),
         preparedStatementManager = PreparedStatementManager(
           maxAutoPrepared: maxAutoPrepare,
@@ -76,6 +78,7 @@ class DpgsqlConnector {
   final TimeZoneSettings timeZone;
   final bool replication;
   final bool inferStringParametersAsUnknown;
+  final bool useExtendedQueryForUnparameterizedCommands;
   final PreparedStatementManager preparedStatementManager;
 
   Socket? _socket;
@@ -87,6 +90,9 @@ class DpgsqlConnector {
 
   final TypeHandlerRegistry _typeRegistry;
   final Map<String, RowDescriptionMessage> _preparedRowDescriptions = {};
+  final Map<String, _PreparedMapMetadata> _preparedMapMetadata = {};
+  final Queue<IBackendMessage> _bufferedBackendMessages =
+      Queue<IBackendMessage>();
 
   FrontendMessages? _frontendMessages;
   late BackendMessageReader _backendReader;
@@ -441,7 +447,9 @@ class DpgsqlConnector {
 
   Future<IBackendMessage> readMessage() async {
     while (true) {
-      final msg = await _readRawMessage();
+      final msg = _bufferedBackendMessages.isNotEmpty
+          ? _bufferedBackendMessages.removeFirst()
+          : await _readRawMessageAndDrainAvailable();
 
       _processPipelineMessage(msg);
 
@@ -633,9 +641,19 @@ class DpgsqlConnector {
     return createPipelineReader([command], drainReadyOnClose: false);
   }
 
-  Future<IBackendMessage> _readRawMessage() async {
+  Future<IBackendMessage> _readRawMessageAndDrainAvailable() async {
     final raw = await _msgReader!.readMessage();
-    return _backendReader.parse(raw);
+    final first = _backendReader.parse(raw);
+
+    while (true) {
+      final next = _msgReader!.tryReadMessage();
+      if (next == null) {
+        break;
+      }
+      _bufferedBackendMessages.add(_backendReader.parse(next));
+    }
+
+    return first;
   }
 
   Future<void> prepare(String sql, String statementName,
@@ -667,6 +685,7 @@ class DpgsqlConnector {
       if (msg is ParameterDescriptionMessage) continue;
       if (msg is RowDescriptionMessage) {
         _preparedRowDescriptions[statementName] = msg;
+        _preparedMapMetadata.remove(statementName);
         continue;
       }
       if (msg is NoDataMessage) continue;
@@ -800,13 +819,22 @@ class DpgsqlConnector {
       }
       return reader;
     } else {
-      // Simple Query Protocol (Only if no parameters and no prepared statement)
-      // If prepared statement is used but no parameters, we must use Extended Protocol too.
-      if (statementName != null) {
+      // Simple Query Protocol is the default when there are no parameters,
+      // preserving PostgreSQL multi-statement semantics. Some ORM workloads
+      // prefer extended protocol even without parameters to request binary
+      // result columns and avoid text parsing on every row.
+      if (statementName != null || useExtendedQueryForUnparameterizedCommands) {
         // Extended Protocol without parameters
+        if (statementName == null) {
+          await _frontendMessages!.writeParse(
+            query: sql,
+            parameterTypeOids: const <int>[],
+            flush: false,
+          );
+        }
         await _frontendMessages!.writeBind(
           portalName: '',
-          statementName: statementName,
+          statementName: statementName ?? '',
           resultFormatCodes: [resultFormatCode],
           flush: false,
         );
@@ -923,6 +951,16 @@ class DpgsqlConnector {
       );
     }
 
+    final autoPreparedRows = await _tryExecuteAutoPreparedUnparameterizedMaps(
+      sql,
+      parameters: parameters,
+      statementName: statementName,
+      resultMode: resultMode,
+    );
+    if (autoPreparedRows != null) {
+      return autoPreparedRows;
+    }
+
     final reader = await executeReader(
       sql,
       parameters: parameters,
@@ -943,6 +981,89 @@ class DpgsqlConnector {
     } finally {
       await reader.close();
     }
+  }
+
+  Future<List<Map<String, dynamic>>?>
+      _tryExecuteAutoPreparedUnparameterizedMaps(
+    String sql, {
+    DpgsqlParameterCollection? parameters,
+    String? statementName,
+    required PgResultMode resultMode,
+  }) async {
+    if (!useExtendedQueryForUnparameterizedCommands ||
+        statementName != null ||
+        (parameters != null && parameters.isNotEmpty) ||
+        preparedStatementManager.maxAutoPrepared <= 0) {
+      return null;
+    }
+
+    const paramOids = <int>[];
+    final prepared = preparedStatementManager.tryGetPreparedStatement(
+      sql,
+      paramOids,
+    );
+    final preparedName = prepared?.name;
+    final preparedDescription =
+        preparedName == null ? null : _preparedRowDescriptions[preparedName];
+    if (preparedName != null && preparedDescription != null) {
+      return resultMode == PgResultMode.rawText
+          ? _executePreparedMapsRawTextFast(
+              preparedName,
+              parameters,
+              preparedDescription,
+            )
+          : _executePreparedMapsFast(
+              preparedName,
+              parameters,
+              preparedDescription,
+            );
+    }
+
+    final candidate =
+        preparedStatementManager.tryGetOrCreateAutoPrepareCandidate(
+      sql,
+      paramOids,
+    );
+    if (candidate == null) {
+      return null;
+    }
+
+    final autoPrepareStatement = preparedStatementManager.beginAutoPrepare(
+      candidate,
+      paramOids,
+    );
+    final autoPreparedName = autoPrepareStatement?.name;
+    if (autoPrepareStatement == null ||
+        autoPreparedName == null ||
+        autoPreparedName.isEmpty) {
+      return null;
+    }
+
+    try {
+      await _writePendingUnprepareMessages();
+      await prepare(sql, autoPreparedName, DpgsqlParameterCollection());
+      preparedStatementManager.completeAutoPrepare(autoPrepareStatement);
+    } catch (_) {
+      autoPrepareStatement.abortPrepare();
+      rethrow;
+    }
+
+    final rowDescription = _preparedRowDescriptions[autoPreparedName];
+    if (rowDescription == null) {
+      return null;
+    }
+
+    return resultMode == PgResultMode.rawText
+        ? _executePreparedMapsRawTextFast(
+            autoPreparedName,
+            parameters,
+            rowDescription,
+          )
+        : _executePreparedMapsFast(
+            autoPreparedName,
+            parameters,
+            rowDescription,
+          );
   }
 
   Future<List<PgRow>> executePgRows(
@@ -1080,18 +1201,11 @@ class DpgsqlConnector {
     await _frontendMessages!.writeExecute(flush: false);
     await _frontendMessages!.writeSync();
 
-    final fields = rowDescription.fields;
-    final columnNames = List<String>.generate(
-      fields.length,
-      (i) => fields[i].name,
-      growable: false,
-    );
-    final handlers = List<TypeHandler?>.filled(fields.length, null);
-    final oids = List<int>.filled(fields.length, 0);
-    for (var i = 0; i < fields.length; i++) {
-      final oid = fields[i].oid;
-      oids[i] = oid;
-      handlers[i] = _typeRegistry.resolve(oid);
+    final metadata = _preparedMapMetadataFor(statementName, rowDescription);
+
+    if ((_pipelineQueue == null || !_pipelineQueue!.inPipelineMode) &&
+        _bufferedBackendMessages.isEmpty) {
+      return _readPreparedMapsFastRaw(metadata);
     }
 
     final rows = <Map<String, dynamic>>[];
@@ -1105,7 +1219,12 @@ class DpgsqlConnector {
         continue;
       }
       if (msg is DataRowMessage) {
-        rows.add(_decodeMaterializedMap(msg, columnNames, oids, handlers));
+        rows.add(_decodeMaterializedMap(
+          msg,
+          metadata.columnNames,
+          metadata.oids,
+          metadata.handlers,
+        ));
         continue;
       }
       if (msg is CommandCompleteMessage || msg is RowDescriptionMessage) {
@@ -1124,6 +1243,99 @@ class DpgsqlConnector {
           detail: err.detail,
           hint: err.hint,
         );
+      }
+    }
+  }
+
+  Future<List<Map<String, dynamic>>> _readPreparedMapsFastRaw(
+    _PreparedMapMetadata metadata,
+  ) async {
+    final rows = <Map<String, dynamic>>[];
+    final rawQueue = Queue<PostgresMessage>();
+
+    Future<PostgresMessage> nextRawMessage() async {
+      if (rawQueue.isNotEmpty) {
+        return rawQueue.removeFirst();
+      }
+      final first = await _msgReader!.readMessage();
+      while (true) {
+        final next = _msgReader!.tryReadMessage();
+        if (next == null) {
+          break;
+        }
+        rawQueue.add(next);
+      }
+      return first;
+    }
+
+    while (true) {
+      final raw = await nextRawMessage();
+      switch (raw.typeCode) {
+        case 0x44: // DataRow
+          final row = _backendReader.parse(raw) as DataRowMessage;
+          rows.add(_decodeMaterializedMap(
+            row,
+            metadata.columnNames,
+            metadata.oids,
+            metadata.handlers,
+          ));
+          continue;
+        case 0x5A: // ReadyForQuery
+          _handleReadyForQueryMessage();
+          return rows;
+        case 0x43: // CommandComplete
+        case 0x54: // RowDescription
+        case 0x32: // BindComplete
+        case 0x31: // ParseComplete
+        case 0x33: // CloseComplete
+        case 0x74: // ParameterDescription
+        case 0x6E: // NoData
+          continue;
+        case 0x41: // NotificationResponse
+          final msg = _backendReader.parse(raw) as NotificationResponseMessage;
+          _notificationController.add(DpgsqlNotificationEventArgs(
+            msg.channel,
+            msg.payload,
+            msg.processId,
+          ));
+          continue;
+        case 0x4E: // NoticeResponse
+          final msg = _backendReader.parse(raw) as NoticeResponseMessage;
+          _noticeController.add(msg.notice);
+          continue;
+        case 0x53: // ParameterStatus
+          final msg = _backendReader.parse(raw) as ParameterStatusMessage;
+          _serverParameters[msg.parameter] = msg.value;
+          continue;
+        case 0x45: // ErrorResponse
+          final msg = _backendReader.parse(raw) as ErrorResponseMessage;
+          final err = msg.error;
+          throw PostgresException(
+            severity: err.severity ?? 'ERROR',
+            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
+            sqlState: err.sqlState ?? '00000',
+            messageText: err.messageText ?? 'Unknown Error',
+            detail: err.detail,
+            hint: err.hint,
+          );
+        default:
+          _bufferedBackendMessages.add(_backendReader.parse(raw));
+          final msg = await readMessage();
+          if (msg is ReadyForQueryMessage) {
+            return rows;
+          }
+          if (msg is ErrorResponseMessage) {
+            final err = msg.error;
+            throw PostgresException(
+              severity: err.severity ?? 'ERROR',
+              invariantSeverity:
+                  err.invariantSeverity ?? err.severity ?? 'ERROR',
+              sqlState: err.sqlState ?? '00000',
+              messageText: err.messageText ?? 'Unknown Error',
+              detail: err.detail,
+              hint: err.hint,
+            );
+          }
       }
     }
   }
@@ -1150,12 +1362,8 @@ class DpgsqlConnector {
     await _frontendMessages!.writeExecute(flush: false);
     await _frontendMessages!.writeSync();
 
-    final fields = rowDescription.fields;
-    final columnNames = List<String>.generate(
-      fields.length,
-      (i) => fields[i].name,
-      growable: false,
-    );
+    final columnNames =
+        _preparedMapMetadataFor(statementName, rowDescription).columnNames;
 
     final rows = <Map<String, dynamic>>[];
     while (true) {
@@ -1188,6 +1396,34 @@ class DpgsqlConnector {
         );
       }
     }
+  }
+
+  _PreparedMapMetadata _preparedMapMetadataFor(
+    String statementName,
+    RowDescriptionMessage rowDescription,
+  ) {
+    final cached = _preparedMapMetadata[statementName];
+    if (cached != null) {
+      return cached;
+    }
+
+    final fields = rowDescription.fields;
+    final columnNames = List<String>.generate(
+      fields.length,
+      (i) => fields[i].name,
+      growable: false,
+    );
+    final handlers = List<TypeHandler?>.filled(fields.length, null);
+    final oids = List<int>.filled(fields.length, 0);
+    for (var i = 0; i < fields.length; i++) {
+      final oid = fields[i].oid;
+      oids[i] = oid;
+      handlers[i] = _typeRegistry.resolve(oid);
+    }
+
+    final metadata = _PreparedMapMetadata(columnNames, oids, handlers);
+    _preparedMapMetadata[statementName] = metadata;
+    return metadata;
   }
 
   Future<List<PgRow>> _executePreparedPgRowsFast(
@@ -2133,4 +2369,12 @@ class DpgsqlConnector {
       }
     }
   }
+}
+
+final class _PreparedMapMetadata {
+  const _PreparedMapMetadata(this.columnNames, this.oids, this.handlers);
+
+  final List<String> columnNames;
+  final List<int> oids;
+  final List<TypeHandler?> handlers;
 }

@@ -73,22 +73,55 @@ class DpgsqlDataSource {
 
   /// Opens a connection to the database. If the pool is exhausted, waits until
   /// another caller closes a pooled connection or [connectionTimeout] elapses.
-  Future<DpgsqlConnection> openConnection() async {
+  Future<DpgsqlConnection> openConnection() {
     _throwIfDisposed();
 
     if (!pooling) {
-      final connector = _createConnector();
-      await connector.open();
-      final connection = DpgsqlConnection.fromConnector(connector, null);
-      await _restoreSessionParameters(
-        connection,
-        connector,
-        restoreStartupParameters: false,
-      );
-      await _invokeOnOpen(connection);
-      return connection;
+      return _openNonPooledConnection();
     }
 
+    if (_builder.noResetOnClose) {
+      final connection = _tryOpenIdleNoResetConnection();
+      if (connection != null) {
+        return Future<DpgsqlConnection>.value(connection);
+      }
+    }
+
+    return _openPooledConnectionSlow();
+  }
+
+  Future<DpgsqlConnection> _openNonPooledConnection() async {
+    final connector = _createConnector();
+    await connector.open();
+    final connection = DpgsqlConnection.fromConnector(connector, null);
+    await _restoreSessionParameters(
+      connection,
+      connector,
+      restoreStartupParameters: false,
+    );
+    await _invokeOnOpen(connection);
+    return connection;
+  }
+
+  DpgsqlConnection? _tryOpenIdleNoResetConnection() {
+    while (_idleConnectors.isNotEmpty) {
+      final pooled = _idleConnectors.removeLast();
+      if (_canReuse(pooled)) {
+        pooled.wasReused = true;
+        _busyCount++;
+        _totalConnectionsReused++;
+        return DpgsqlConnection.fromConnector(
+          pooled.connector,
+          _returnConnector,
+        );
+      }
+      unawaited(_discardIdleConnector(pooled));
+    }
+
+    return null;
+  }
+
+  Future<DpgsqlConnection> _openPooledConnectionSlow() async {
     while (true) {
       final pooled = await _rentConnector();
       try {
@@ -235,7 +268,9 @@ class DpgsqlDataSource {
 
     _busyCount--;
     _idleConnectors.add(pooled);
-    _pruneIdleConnectors();
+    if (!_builder.noResetOnClose) {
+      _pruneIdleConnectors();
+    }
   }
 
   _PoolWaiter? _takeWaiter() {
@@ -443,6 +478,8 @@ class DpgsqlDataSource {
       decodeUuidAsString: _builder.decodeUuidAsString,
       decodeJsonAsString: _builder.decodeJsonAsString,
       inferStringParametersAsUnknown: _builder.inferStringParametersAsUnknown,
+      useExtendedQueryForUnparameterizedCommands:
+          _builder.useExtendedQueryForUnparameterizedCommands,
     );
   }
 

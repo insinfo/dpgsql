@@ -313,6 +313,61 @@ SELECT
     }
   });
 
+  test('executeMaps can use extended protocol for unparameterized queries',
+      () async {
+    final settings = DpgsqlConnectionStringBuilder(realConnectionString())
+      ..useExtendedQueryForUnparameterizedCommands = true;
+    final conn = DpgsqlConnection.fromConnectionStringBuilder(settings);
+    await conn.open();
+
+    try {
+      final rows = await conn.executeMaps('''
+SELECT
+  42::int4 AS id,
+  '2024-01-02 03:04:05'::timestamp AS criado_em
+''');
+
+      expect(rows, hasLength(1));
+      expect(rows.single['id'], equals(42));
+      expect(rows.single['criado_em'], isA<DateTime>());
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('executeMaps auto-prepares repeated unparameterized queries', () async {
+    final settings = DpgsqlConnectionStringBuilder(realConnectionString())
+      ..useExtendedQueryForUnparameterizedCommands = true
+      ..maxAutoPrepare = 8
+      ..autoPrepareMinUsages = 2;
+    final conn = DpgsqlConnection.fromConnectionStringBuilder(settings);
+    await conn.open();
+
+    const sql = '''
+SELECT
+  42::int4 AS id,
+  '2024-01-02 03:04:05'::timestamp AS criado_em
+''';
+
+    try {
+      await conn.executeMaps(sql);
+      await conn.executeMaps(sql);
+      final count = await conn.executeScalar(
+        "SELECT count(*)::int4 FROM pg_prepared_statements WHERE statement = @sql",
+        parameters: DpgsqlParameterCollection()
+          ..add(DpgsqlParameter('sql', sql)),
+      );
+
+      expect(count, equals(1));
+
+      final rows = await conn.executeMaps(sql);
+      expect(rows.single['id'], equals(42));
+      expect(rows.single['criado_em'], isA<DateTime>());
+    } finally {
+      await conn.close();
+    }
+  });
+
   test('rawText result mode materializes PHP-style string maps', () async {
     final conn = await openRealConnectionOrSkip();
     if (conn == null) return;

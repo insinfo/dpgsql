@@ -26,25 +26,72 @@ class PostgresMessageReader {
   PostgresMessageReader(this._input);
 
   final BinaryInput _input;
+  int? _pendingTypeCode;
+  int? _pendingLength;
 
   /// Lê a próxima mensagem (1 byte de tipo + int32 de tamanho + corpo).
   Future<PostgresMessage> readMessage() async {
-    if (_input.availableBytes < 5) {
+    final available = tryReadMessage();
+    if (available != null) {
+      return available;
+    }
+
+    if (_pendingTypeCode == null && _input.availableBytes < 5) {
       await _input.ensureBytes(5);
     }
+
+    if (_pendingTypeCode == null) {
+      _readHeader();
+    }
+
+    final bodyLength = _pendingLength! - 4;
+    if (_input.availableBytes < bodyLength) {
+      await _input.ensureBytes(bodyLength);
+    }
+
+    return _readBody();
+  }
+
+  /// Reads a complete message already buffered in memory, without awaiting.
+  ///
+  /// If only the header is available, it is consumed and retained until the
+  /// body arrives. This lets callers drain all complete messages currently in
+  /// the socket buffer after a single asynchronous read.
+  PostgresMessage? tryReadMessage() {
+    if (_pendingTypeCode == null) {
+      if (_input.availableBytes < 5) {
+        return null;
+      }
+      _readHeader();
+    }
+
+    final bodyLength = _pendingLength! - 4;
+    if (_input.availableBytes < bodyLength) {
+      return null;
+    }
+
+    return _readBody();
+  }
+
+  void _readHeader() {
     final typeCode = _input.readUint8();
     final length = _input.readInt32();
     if (length < 4) {
       throw StateError('Tamanho de mensagem inválido: $length');
     }
+    _pendingTypeCode = typeCode;
+    _pendingLength = length;
+  }
 
-    final bodyLength = length - 4;
-    if (_input.availableBytes < bodyLength) {
-      await _input.ensureBytes(bodyLength);
-    }
-    final rawPayload = _input.readBytes(bodyLength);
+  PostgresMessage _readBody() {
+    final typeCode = _pendingTypeCode!;
+    final length = _pendingLength!;
+    final rawPayload = _input.readBytes(length - 4);
     final payload =
         (rawPayload is Uint8List) ? rawPayload : Uint8List.fromList(rawPayload);
+
+    _pendingTypeCode = null;
+    _pendingLength = null;
 
     return PostgresMessage(typeCode, length, payload);
   }

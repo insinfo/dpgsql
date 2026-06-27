@@ -75,4 +75,16 @@ void main() {
       contains('Database=dart_test;'),
     );
   });
+
+  test('connection string builder parses extended query preference', () {
+    final builder = DpgsqlConnectionStringBuilder(
+      'Use Extended Query For Unparameterized Commands=true',
+    );
+
+    expect(builder.useExtendedQueryForUnparameterizedCommands, isTrue);
+
+    builder.useExtendedQueryForUnparameterizedCommands = false;
+    expect(builder.toString(),
+        contains('Use Extended Query For Unparameterized Commands=false;'));
+  });
 }

@@ -38,6 +38,39 @@ Diretrizes do port:
 - Para uso no Sali/Eloquent, o conjunto atual cobre os tipos do schema inspecionado; ainda falta teste de carga real do `new_sali` com pool, `executeMaps()`, timezone `America/Sao_Paulo`, serializacao JSON e consultas grandes do `processo_repository.dart`.
 - Adicionada API `DpgsqlDataSource.onOpen`/`DpgsqlDataSourceBuilder.configureOnOpen`, no estilo `settings.onOpen`, e teste real `real_data_source_on_open_test.dart` cobrindo troca de `client_encoding` para `LATIN1` e `TimeZone=America/Sao_Paulo` em conexao fisica pooled.
 
+## Progresso 2026-06-27 (benchmark Sali vs postgresql-fork)
+
+- Investigado benchmark real do `new_sali/backend` (`benchmark/db_driver_benchmark.dart`) comparando `driver_implementation=dpgsql` contra `postgres`/`postgresql-fork` com pool, queries reais `processos_page` e `andamentos_page`.
+- Diagnostico principal: as queries do benchmark nao possuem parametros; o `dpgsql` usava Simple Query Protocol nesse caso, entao o PostgreSQL retornava colunas em formato texto e o driver fazia parse de `int`/`timestamp` por linha. O `postgresql-fork`, no caminho `query()`, usa Extended Query Protocol e pede resultados binarios mesmo sem parametros.
+- Adicionada opcao `Use Extended Query For Unparameterized Commands`/`useExtendedQueryForUnparameterizedCommands`, desligada por padrao para preservar semantica de Simple Query e multiplos statements, mas disponivel para workloads ORM/query builder de SELECT unico repetido.
+- `DpgsqlConnector.executeReader()` agora usa Parse/Bind/Describe/Execute/Sync sem parametros quando essa opcao esta ligada, permitindo resultado binario em consultas sem parametros.
+- O adaptador `DpgsqlPDO` do `eloquent` liga essa opcao por padrao, aproximando o hot path do `postgresql-fork` no SALI.
+- Validacao local: `dart analyze`, `timeout-cli.exe 30 dart test test\datasource_builder_test.dart test\real_type_decode_test.dart -j 1 --chain-stack-traces` e `timeout-cli.exe 30 dart test test\dpgsql_querybuilder_test.dart -j 1 --chain-stack-traces` passando.
+- Resultado local curto antes/depois no `new_sali/backend` (`pool=true`, `poolSize=16`, `concurrency=1`):
+  - antes: `processos_page` `dpgsql` ~2.60 ms vs `postgres` ~0.68 ms; `andamentos_page` `dpgsql` ~4.31 ms vs `postgres` ~0.56 ms;
+  - depois: `processos_page` `dpgsql` ~0.85 ms vs `postgres` ~0.49 ms; `andamentos_page` `dpgsql` ~1.26 ms vs `postgres` ~0.62 ms.
+- Resultado local curto concorrente (`iterations=500`, `warmup=50`, `concurrency=8`): throughput ficou muito mais proximo (`processos_page` ~1173 qps `dpgsql` vs ~1186 qps `postgres`; `andamentos_page` ~1269 qps `dpgsql` vs ~1187 qps `postgres`), embora as latencias por operacao ainda mostrem variancia no benchmark.
+- Proxima otimizacao clara: auto-prepare/cache de `RowDescription` para comandos sem parametros, para evitar reenviar `Parse`/`Describe` em SELECTs repetidos e permitir usar o fast path preparado de `executeMaps()`.
+- Implementado auto-prepare para `executeMaps()` sem parametros quando `Use Extended Query For Unparameterized Commands=true`, reutilizando `RowDescription` cacheado e usando o fast path preparado de mapas.
+- `PostgresMessageReader` ganhou `tryReadMessage()` e `DpgsqlConnector` passou a drenar mensagens ja disponiveis para uma fila interna, aproximando o comportamento do `MessageFramer` do `postgresql-fork` e reduzindo `await` por mensagem quando o socket ja entregou um bloco maior.
+- `executeMaps()` preparado ganhou cache de metadados de mapa por statement (`columnNames`, OIDs e handlers) e leitor bruto especializado para o caminho preparado, evitando parte do processamento generico por mensagem no hot path.
+- `MemoryBinaryInput` e `BinaryOutput` deixaram de criar `ByteData.sublistView` para inteiros primitivos, usando shifts diretos em leituras/escritas big-endian.
+- `DpgsqlDataSource` recebeu fast path para pool com `No Reset On Close=true`, evitando health check/reset/pruning por query quando ha conector idle valido; `DpgsqlConnection.close()` tambem evita `async` real no retorno seguro ao pool.
+- `DpgsqlCommand` passou a executar comandos sem parametros e nao preparados diretamente pela conexao, sem criar `DpgsqlCommandExecutionPlan` por execucao.
+- O adaptador `DpgsqlPDO` do `eloquent` passou a chamar `DpgsqlConnection.executeMaps()` diretamente para queries com retorno, evitando criar `DpgsqlCommand` no caminho de SELECT/RETURNING.
+- Resultado AOT local no `new_sali/backend` apos as otimizacoes (`iterations=4000`, `warmup=500`, `pool=true`, `poolSize=16`):
+  - `concurrency=1`: `select_1` `dpgsql` 0.23 ms vs `postgres` 0.18 ms; `processos_page` 0.30 ms vs 0.28 ms; `andamentos_page` 0.40 ms vs 0.43 ms (`dpgsql` mais rapido nesse cenario).
+  - `concurrency=8`: `select_1` `dpgsql` 1.28 ms vs `postgres` 0.84 ms; `processos_page` 1.61 ms vs 1.54 ms; `andamentos_page` 2.03 ms vs 2.17 ms (`dpgsql` mais rapido nesse cenario).
+- Executado `benchmarks/run_driver_comparison.ps1` em rodada curta AOT (`BENCH_ITERATIONS=200`, `BENCH_RESULTSET_ITERATIONS=5`, rows `10,1000`) sem regressao consideravel: `dpgsql_aot` ficou a frente de `postgres_fork` em `SELECT 1` (0.143 ms vs 0.163 ms), prepared (0.163 ms vs 0.182 ms), `maps_1000` (2.518 ms vs 4.087 ms) e `full_1000` (2.044 ms vs 3.782 ms). A unica perda Dart relevante na amostra foi parametro pequeno sem prepare (`dpgsql_aot` 0.192 ms vs `postgres_fork` 0.176 ms).
+- Diagnostico atual: no benchmark interno puro de driver, `dpgsql_aot` ja vence `postgres_fork` na maioria dos cenarios medidos; no SALI/Eloquent, a diferenca restante aparece principalmente em `select_1` e vem de custo fixo de adapter/pool/execucao por query, nao de decode de linhas.
+- Repetido benchmark AOT do SALI com amostra maior (`iterations=10000`, `warmup=1000`, `pool=true`, `poolSize=16`):
+  - `concurrency=1`: `select_1` `dpgsql` 0.23 ms vs `postgres` 0.17 ms; `processos_page` 0.30 ms vs 0.27 ms; `andamentos_page` 0.40 ms vs 0.42 ms (`dpgsql` mais rapido nessa query real).
+  - `concurrency=8`: `select_1` `dpgsql` 1.22 ms vs `postgres` 0.73 ms; `processos_page` 1.41 ms vs 1.56 ms; `andamentos_page` 1.81 ms vs 1.91 ms. Com concorrencia, `dpgsql` venceu as duas queries reais do SALI medidas e perdeu apenas no microcaso `select_1`.
+- Repetido `benchmarks/run_driver_comparison.ps1` com amostra maior (`BENCH_ITERATIONS=1000`, `BENCH_RESULTSET_ITERATIONS=10`, rows `1000,3000,10000`):
+  - Contra Dart: `dpgsql_aot` venceu `postgres_fork` e `postgres_3` em `SELECT 1`, drain/simple/maps/full result sets e aplicacao typed JSON; ainda ficou levemente atras do `postgres_fork` em parametro/prepared pequeno nessa amostra (`param` 0.184 ms vs 0.178 ms; `prepared` 0.189 ms vs 0.173 ms).
+  - Contra PHP: `php_pgsql`/`PDO_PGSQL` ainda vencem em escalares pequenos e mapas tipados puros (`maps_10000`: `dpgsql_aot` 19.896 ms, `php_pgsql` 13.181 ms, `php_pdo_pgsql` 17.475 ms), mas `dpgsql_aot` vence em result sets `simple` grandes (`simple_10000`: 5.749 ms vs 8.191/9.665 ms), em `drain_3000/10000`, em `rawText maps_10000` comparavel ao estilo PHP (12.306 ms vs `php_pgsql` maps 13.181 ms e `PDO` 17.475 ms), e no benchmark de aplicacao com classe tipada + JSON (`typed_json_10000`: 32.293 ms vs `php_pgsql` 43.471 ms e `PDO` 44.891 ms).
+  - Conclusao: `dpgsql` ja e competitivo/superior em cenarios Dart e em workloads de aplicacao tipada; para vencer PHP nativo em mapas tipados puros ainda falta reduzir custo de materializacao `Map<String, dynamic>` e decode de `numeric/timestamp` ou usar `PgResultMode.rawText` quando a semantica desejada for PHP-like.
+
 ## Estado Atual
 
 Core implementado:

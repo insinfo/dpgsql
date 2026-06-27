@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.0.1
+
+- Added `Use Extended Query For Unparameterized Commands`, allowing ORM/query-builder workloads to use extended protocol and binary result decoding for repeated single-statement queries without parameters.
+- Added auto-prepare support for unparameterized `executeMaps()` when extended query mode is enabled, reusing cached `RowDescription` metadata.
+- Optimized prepared `executeMaps()` with cached map metadata and a specialized raw message reader for the hot path.
+- Added buffered backend-message draining via `PostgresMessageReader.tryReadMessage()`, reducing awaits when the socket already delivered multiple PostgreSQL messages.
+- Reduced fixed query overhead in pooled ORM workloads with a no-reset pool fast path and synchronous safe return of pooled connections.
+- Reduced per-execution overhead for unparameterized `DpgsqlCommand` calls by bypassing execution-plan allocation when no rewrite is needed.
+- Removed temporary `ByteData.sublistView` allocations from primitive binary input/output paths.
+- Improved Eloquent/SALI performance: larger AOT benchmark samples now show `dpgsql` matching or beating `postgresql-fork` on measured real SALI queries under pool concurrency, while still trailing on the `SELECT 1` microcase.
+- Re-ran driver comparison benchmarks against `postgres_fork`, `postgres`, PHP `ext-pgsql`, PHP `PDO_PGSQL`, `voryx/PgAsync`, and `amphp/postgres`; `dpgsql_aot` remains ahead of Dart drivers on most result-set scenarios and wins application typed class + JSON serialization against measured PHP drivers.
+- Added focused tests covering the extended unparameterized query option and auto-prepared unparameterized `executeMaps()`.
+
 ## 1.0.0
 
 - Added PostgreSQL real integration coverage for pipeline, COPY, pooling, encodings, notifications, error recovery, and common type decoding.

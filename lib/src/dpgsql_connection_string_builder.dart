@@ -526,6 +526,23 @@ class DpgsqlConnectionStringBuilder {
   set inferStringParametersAsUnknown(bool value) =>
       _parameters['Infer String Parameters As Unknown'] = value.toString();
 
+  /// Uses the extended query protocol for commands without parameters.
+  ///
+  /// Disabled by default to preserve Simple Query semantics, including support
+  /// for multiple SQL statements in one command. Enable for ORM/query-builder
+  /// workloads that repeatedly execute single SELECT statements and benefit
+  /// from binary result formats, matching the hot path used by postgresql-fork.
+  bool get useExtendedQueryForUnparameterizedCommands => _getBool(
+        false,
+        'Use Extended Query For Unparameterized Commands',
+        'UseExtendedQueryForUnparameterizedCommands',
+        'Extended Query For Unparameterized Commands',
+        'ExtendedQueryForUnparameterizedCommands',
+      );
+  set useExtendedQueryForUnparameterizedCommands(bool value) =>
+      _parameters['Use Extended Query For Unparameterized Commands'] =
+          value.toString();
+
   String? operator [](String keyword) => _get(keyword);
   void operator []=(String keyword, String? value) {
     if (value == null) {

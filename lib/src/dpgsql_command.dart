@@ -80,6 +80,18 @@ class DpgsqlCommand {
       throw StateError('Connection must be open');
     }
 
+    if (_canExecuteDirectlyWithoutPlan) {
+      if (connection!.inPipelineMode) {
+        final pending = await connection!.executeQueryPipelined(
+          commandText,
+          resultMode: resultMode,
+        );
+        return connection!.getPipelineReader(pending);
+      }
+
+      return connection!.executeReader(commandText, resultMode: resultMode);
+    }
+
     final plan = buildExecutionPlan();
 
     if (connection!.inPipelineMode) {
@@ -109,6 +121,10 @@ class DpgsqlCommand {
       throw StateError('executeRows cannot be used while in pipeline mode');
     }
 
+    if (_canExecuteDirectlyWithoutPlan) {
+      return connection!.executeRows(commandText);
+    }
+
     final plan = buildExecutionPlan();
     return connection!.executeRows(
       plan.sql,
@@ -124,6 +140,10 @@ class DpgsqlCommand {
     }
     if (connection!.inPipelineMode) {
       throw StateError('executeScalar cannot be used while in pipeline mode');
+    }
+
+    if (_canExecuteDirectlyWithoutPlan) {
+      return connection!.executeScalar(commandText);
     }
 
     final plan = buildExecutionPlan();
@@ -145,6 +165,10 @@ class DpgsqlCommand {
       throw StateError('executeMaps cannot be used while in pipeline mode');
     }
 
+    if (_canExecuteDirectlyWithoutPlan) {
+      return connection!.executeMaps(commandText, resultMode: resultMode);
+    }
+
     final plan = buildExecutionPlan();
     return connection!.executeMaps(
       plan.sql,
@@ -161,6 +185,10 @@ class DpgsqlCommand {
     }
     if (connection!.inPipelineMode) {
       throw StateError('executePgRows cannot be used while in pipeline mode');
+    }
+
+    if (_canExecuteDirectlyWithoutPlan) {
+      return connection!.executePgRows(commandText);
     }
 
     final plan = buildExecutionPlan();
@@ -180,6 +208,10 @@ class DpgsqlCommand {
       throw StateError('forEachPgRow cannot be used while in pipeline mode');
     }
 
+    if (_canExecuteDirectlyWithoutPlan) {
+      return connection!.forEachPgRow(commandText, action);
+    }
+
     final plan = buildExecutionPlan();
     return connection!.forEachPgRow(
       plan.sql,
@@ -197,6 +229,10 @@ class DpgsqlCommand {
     if (connection!.inPipelineMode) {
       throw StateError(
           'forEachPgRowSync cannot be used while in pipeline mode');
+    }
+
+    if (_canExecuteDirectlyWithoutPlan) {
+      return connection!.forEachPgRowSync(commandText, action);
     }
 
     final plan = buildExecutionPlan();
@@ -312,6 +348,8 @@ class DpgsqlCommand {
       growable: false,
     );
   }
+
+  bool get _canExecuteDirectlyWithoutPlan => !_isPrepared && parameters.isEmpty;
 }
 
 /// Internal representation of an DpgsqlCommand execution plan.

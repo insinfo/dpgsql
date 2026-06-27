@@ -112,6 +112,8 @@ class DpgsqlConnection {
         decodeUuidAsString: builder.decodeUuidAsString,
         decodeJsonAsString: builder.decodeJsonAsString,
         inferStringParametersAsUnknown: builder.inferStringParametersAsUnknown,
+        useExtendedQueryForUnparameterizedCommands:
+            builder.useExtendedQueryForUnparameterizedCommands,
       );
 
       _connector!.notifications.listen((e) {
@@ -140,17 +142,35 @@ class DpgsqlConnection {
   }
 
   /// Closes the connection to the database.
-  Future<void> close() async {
-    if (_connector != null) {
-      final connector = _connector!;
-      if (_returnToPoolAction != null) {
-        if (!isSafeToReturnToPool) {
-          await connector.close();
-        }
-        _returnToPoolAction(connector);
-      } else {
-        await connector.close();
-      }
+  Future<void> close() {
+    final connector = _connector;
+    if (connector == null) {
+      _state = ConnectionState.closed;
+      return Future<void>.value();
+    }
+
+    final returnToPool = _returnToPoolAction;
+    if (returnToPool != null && isSafeToReturnToPool) {
+      returnToPool(connector);
+      _connector = null;
+      _state = ConnectionState.closed;
+      return Future<void>.value();
+    }
+
+    return _closeConnector(connector, returnToPool);
+  }
+
+  Future<void> _closeConnector(
+    DpgsqlConnector connector,
+    void Function(DpgsqlConnector)? returnToPool,
+  ) async {
+    if (returnToPool != null) {
+      await connector.close();
+      returnToPool(connector);
+    } else {
+      await connector.close();
+    }
+    if (identical(_connector, connector)) {
       _connector = null;
     }
     _state = ConnectionState.closed;
