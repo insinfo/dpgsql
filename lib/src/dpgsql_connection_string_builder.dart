@@ -377,6 +377,64 @@ class DpgsqlConnectionStringBuilder {
   set autoPrepareMinUsages(int value) =>
       _parameters['Auto Prepare Min Usages'] = value.toString();
 
+  /// Skips session reset when returning pooled connections.
+  ///
+  /// This mirrors Npgsql's performance-oriented `No Reset On Close` option.
+  /// It should only be used when the application controls session state.
+  bool get noResetOnClose =>
+      _getBool(false, 'No Reset On Close', 'NoResetOnClose');
+  set noResetOnClose(bool value) =>
+      _parameters['No Reset On Close'] = value.toString();
+
+  String? get searchPath => _get('Search Path', 'SearchPath');
+  set searchPath(String? value) {
+    if (value == null) {
+      _parameters.remove('Search Path');
+    } else {
+      _parameters['Search Path'] = value;
+    }
+  }
+
+  String? get applicationName =>
+      _get('Application Name', 'ApplicationName', 'ApplicationName');
+  set applicationName(String? value) {
+    if (value == null) {
+      _parameters.remove('Application Name');
+    } else {
+      _parameters['Application Name'] = value;
+    }
+  }
+
+  String? get statementTimeout => _get('Statement Timeout', 'StatementTimeout');
+  set statementTimeout(String? value) {
+    if (value == null) {
+      _parameters.remove('Statement Timeout');
+    } else {
+      _parameters['Statement Timeout'] = value;
+    }
+  }
+
+  String? get lockTimeout => _get('Lock Timeout', 'LockTimeout');
+  set lockTimeout(String? value) {
+    if (value == null) {
+      _parameters.remove('Lock Timeout');
+    } else {
+      _parameters['Lock Timeout'] = value;
+    }
+  }
+
+  String? get idleInTransactionSessionTimeout => _get(
+        'Idle In Transaction Session Timeout',
+        'IdleInTransactionSessionTimeout',
+      );
+  set idleInTransactionSessionTimeout(String? value) {
+    if (value == null) {
+      _parameters.remove('Idle In Transaction Session Timeout');
+    } else {
+      _parameters['Idle In Transaction Session Timeout'] = value;
+    }
+  }
+
   /// Decode PostgreSQL network address types (`inet`, `cidr`, `macaddr`,
   /// `macaddr8`) as plain strings instead of Dpgsql network value objects.
   ///

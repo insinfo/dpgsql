@@ -87,6 +87,11 @@ Use `DpgsqlDataSource` for application-level pooling:
 final dataSource = DpgsqlDataSource(
   'Host=127.0.0.1;Database=postgres;Username=dart;Password=dart;'
   'Pooling=true;Minimum Pool Size=2;Maximum Pool Size=50;Timeout=15',
+  onOpen: (connection) async {
+    await connection
+        .createCommand("SET application_name TO 'my-dart-api'")
+        .executeNonQuery();
+  },
 );
 
 await dataSource.warmup();

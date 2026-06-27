@@ -15,6 +15,8 @@ class DpgsqlSlimDataSourceBuilder {
 
   final DpgsqlConnectionStringBuilder connectionStringBuilder;
 
+  DpgsqlConnectionCallback? onOpen;
+
   String get connectionString => connectionStringBuilder.toString();
 
   DpgsqlSlimDataSourceBuilder configureConnectionString(
@@ -24,8 +26,18 @@ class DpgsqlSlimDataSourceBuilder {
     return this;
   }
 
-  DpgsqlDataSource build() => DpgsqlDataSource(connectionString);
+  DpgsqlSlimDataSourceBuilder configureOnOpen(
+    DpgsqlConnectionCallback? callback,
+  ) {
+    onOpen = callback;
+    return this;
+  }
+
+  DpgsqlDataSource build() => DpgsqlDataSource(
+        connectionString,
+        onOpen: onOpen,
+      );
 
   DpgsqlDataSourceBuilder toDataSourceBuilder() =>
-      DpgsqlDataSourceBuilder(connectionString);
+      DpgsqlDataSourceBuilder(connectionString)..onOpen = onOpen;
 }

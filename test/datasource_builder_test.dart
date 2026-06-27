@@ -3,12 +3,16 @@ import 'package:test/test.dart';
 
 void main() {
   test('DpgsqlDataSourceBuilder builds data source from mutable settings', () {
+    var opened = 0;
     final builder = DpgsqlDataSourceBuilder('Host=localhost;Port=5432')
       ..configureConnectionString((settings) {
         settings.database = 'dart_test';
         settings.username = 'dart';
         settings.password = 'secret';
         settings.maxPoolSize = 7;
+      })
+      ..configureOnOpen((_) {
+        opened++;
       });
 
     final dataSource = builder.build();
@@ -19,6 +23,8 @@ void main() {
     expect(dataSource.connectionString, contains('Username=dart;'));
     expect(dataSource.connectionString, contains('Password=secret;'));
     expect(dataSource.maxPoolSize, 7);
+    expect(dataSource.onOpen, isNotNull);
+    expect(opened, 0);
   });
 
   test('DpgsqlSlimDataSourceBuilder preserves Npgsql-like builder shape', () {

@@ -15,6 +15,10 @@ class DpgsqlDataSourceBuilder {
   /// Mutable connection string builder used to configure the data source.
   final DpgsqlConnectionStringBuilder connectionStringBuilder;
 
+  /// Called after each physical connection is opened and after configured
+  /// session settings from the connection string are applied.
+  DpgsqlConnectionCallback? onOpen;
+
   /// Canonical connection string produced from [connectionStringBuilder].
   String get connectionString => connectionStringBuilder.toString();
 
@@ -26,6 +30,16 @@ class DpgsqlDataSourceBuilder {
     return this;
   }
 
+  DpgsqlDataSourceBuilder configureOnOpen(
+    DpgsqlConnectionCallback? callback,
+  ) {
+    onOpen = callback;
+    return this;
+  }
+
   /// Builds a data source using the current connection string settings.
-  DpgsqlDataSource build() => DpgsqlDataSource(connectionString);
+  DpgsqlDataSource build() => DpgsqlDataSource(
+        connectionString,
+        onOpen: onOpen,
+      );
 }

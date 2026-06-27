@@ -31,6 +31,7 @@ Diretrizes do port:
 - Testes adicionados/ajustados em `types_test.dart` e `real_type_decode_test.dart` cobrindo `inet`, `cidr`, `macaddr` e parametros explicitos.
 - Validacao local: `dart analyze`, `timeout-cli.exe 30 dart test test\types_test.dart`, `timeout-cli.exe 30 dart test test\real_type_decode_test.dart -j 1 --chain-stack-traces` e `timeout-cli.exe 60 dart test test\real_restart_recovery_test.dart -j 1 --chain-stack-traces` passando.
 - Para uso no Sali/Eloquent, o conjunto atual cobre os tipos do schema inspecionado; ainda falta teste de carga real do `new_sali` com pool, `executeMaps()`, timezone `America/Sao_Paulo`, serializacao JSON e consultas grandes do `processo_repository.dart`.
+- Adicionada API `DpgsqlDataSource.onOpen`/`DpgsqlDataSourceBuilder.configureOnOpen`, no estilo `settings.onOpen`, e teste real `real_data_source_on_open_test.dart` cobrindo troca de `client_encoding` para `LATIN1` e `TimeZone=America/Sao_Paulo` em conexao fisica pooled.
 
 ## Estado Atual
 

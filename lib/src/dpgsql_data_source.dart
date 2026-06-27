@@ -8,11 +8,17 @@ import 'dpgsql_connection_string_builder.dart';
 
 const _poolMaintenanceTimeout = Duration(milliseconds: 100);
 
+typedef DpgsqlConnectionCallback = FutureOr<void> Function(
+  DpgsqlConnection connection,
+);
+
 /// Represents a source of data for Dpgsql, which can be used to create
 /// connections. Handles connection pooling when `Pooling=true`.
 class DpgsqlDataSource {
-  DpgsqlDataSource(this.connectionString)
-      : _builder = DpgsqlConnectionStringBuilder(connectionString) {
+  DpgsqlDataSource(
+    this.connectionString, {
+    this.onOpen,
+  }) : _builder = DpgsqlConnectionStringBuilder(connectionString) {
     if (_builder.maxPoolSize <= 0) {
       throw ArgumentError('Maximum Pool Size must be greater than zero');
     }
@@ -25,6 +31,7 @@ class DpgsqlDataSource {
   }
 
   final String connectionString;
+  final DpgsqlConnectionCallback? onOpen;
   final DpgsqlConnectionStringBuilder _builder;
   final Queue<_PooledConnector> _idleConnectors = Queue<_PooledConnector>();
   final Queue<_PoolWaiter> _waiters = Queue<_PoolWaiter>();
@@ -56,18 +63,32 @@ class DpgsqlDataSource {
     if (!pooling) {
       final connector = _createConnector();
       await connector.open();
-      return DpgsqlConnection.fromConnector(connector, null);
+      final connection = DpgsqlConnection.fromConnector(connector, null);
+      await _restoreSessionParameters(
+        connection,
+        connector,
+        restoreStartupParameters: false,
+      );
+      await _invokeOnOpen(connection);
+      return connection;
     }
 
     while (true) {
       final pooled = await _rentConnector();
       try {
         if (pooled.wasReused) {
-          if (!await _healthCheck(pooled.connector)) {
-            await _discardBusyConnector(pooled);
-            continue;
+          if (_builder.noResetOnClose) {
+            if (!pooled.connector.isConnected) {
+              await _discardBusyConnector(pooled);
+              continue;
+            }
+          } else {
+            if (!await _healthCheck(pooled.connector)) {
+              await _discardBusyConnector(pooled);
+              continue;
+            }
+            await _resetConnection(pooled.connector);
           }
-          await _resetConnection(pooled.connector);
           _totalConnectionsReused++;
         }
 
@@ -154,6 +175,13 @@ class DpgsqlDataSource {
 
     try {
       await connector.open();
+      final conn = DpgsqlConnection.fromConnector(connector, (_) {});
+      await _restoreSessionParameters(
+        conn,
+        connector,
+        restoreStartupParameters: false,
+      );
+      await _invokeOnOpen(conn);
       _totalConnectionsCreated++;
       return pooled;
     } catch (_) {
@@ -368,17 +396,44 @@ class DpgsqlDataSource {
 
   Future<void> _restoreSessionParameters(
     DpgsqlConnection conn,
-    DpgsqlConnector connector,
-  ) async {
+    DpgsqlConnector connector, {
+    bool restoreStartupParameters = true,
+  }) async {
     final statements = <String>[];
-    final clientEncoding = connector.clientEncoding;
-    if (clientEncoding != null && clientEncoding.isNotEmpty) {
-      statements
-          .add("SET client_encoding = ${_quoteSqlLiteral(clientEncoding)}");
+    if (restoreStartupParameters) {
+      final clientEncoding = connector.clientEncoding;
+      if (clientEncoding != null && clientEncoding.isNotEmpty) {
+        statements
+            .add("SET client_encoding = ${_quoteSqlLiteral(clientEncoding)}");
+      }
+      if (connector.timeZone.value.isNotEmpty) {
+        statements
+            .add("SET TIME ZONE ${_quoteSqlLiteral(connector.timeZone.value)}");
+      }
     }
-    if (connector.timeZone.value.isNotEmpty) {
+    final searchPath = _builder.searchPath;
+    if (searchPath != null && searchPath.trim().isNotEmpty) {
+      statements.add('SET search_path TO $searchPath');
+    }
+    final applicationName = _builder.applicationName;
+    if (applicationName != null && applicationName.isNotEmpty) {
       statements
-          .add("SET TIME ZONE ${_quoteSqlLiteral(connector.timeZone.value)}");
+          .add('SET application_name TO ${_quoteSqlLiteral(applicationName)}');
+    }
+    final statementTimeout = _builder.statementTimeout;
+    if (statementTimeout != null && statementTimeout.isNotEmpty) {
+      statements
+          .add('SET statement_timeout = ${_quoteSqlLiteral(statementTimeout)}');
+    }
+    final lockTimeout = _builder.lockTimeout;
+    if (lockTimeout != null && lockTimeout.isNotEmpty) {
+      statements.add('SET lock_timeout = ${_quoteSqlLiteral(lockTimeout)}');
+    }
+    final idleTimeout = _builder.idleInTransactionSessionTimeout;
+    if (idleTimeout != null && idleTimeout.isNotEmpty) {
+      statements.add(
+        'SET idle_in_transaction_session_timeout = ${_quoteSqlLiteral(idleTimeout)}',
+      );
     }
 
     for (final sql in statements) {
@@ -471,6 +526,13 @@ class DpgsqlDataSource {
   void _throwIfDisposed() {
     if (_disposed) {
       throw StateError('Data source has been disposed');
+    }
+  }
+
+  Future<void> _invokeOnOpen(DpgsqlConnection connection) async {
+    final callback = onOpen;
+    if (callback != null) {
+      await callback(connection);
     }
   }
 }

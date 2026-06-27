@@ -9,7 +9,8 @@ void main() {
     final builder = DpgsqlConnectionStringBuilder(
       'Host=localhost;Minimum Pool Size=2;Maximum Pool Size=8;'
       'Timeout=3;Connection Idle Lifetime=7;Connection Lifetime=11;'
-      'Connection Pruning Interval=13;Decode Network Types As String=true',
+      'Connection Pruning Interval=13;Decode Network Types As String=true;'
+      'No Reset On Close=true',
     );
 
     expect(builder.minPoolSize, 2);
@@ -19,6 +20,7 @@ void main() {
     expect(builder.connectionLifetime, const Duration(seconds: 11));
     expect(builder.connectionPruningInterval, const Duration(seconds: 13));
     expect(builder.decodeNetworkTypesAsString, isTrue);
+    expect(builder.noResetOnClose, isTrue);
     expect(
         DpgsqlConnectionStringBuilder('Host=localhost')
             .decodeNetworkTypesAsString,
@@ -77,6 +79,43 @@ void main() {
     await conn2.close();
     await conn3.close();
 
+    await dataSource.dispose();
+    await server.close();
+  });
+
+  test('DpgsqlDataSource calls onOpen for physical connections only', () async {
+    final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final port = server.port;
+
+    server.listen((client) {
+      client.listen((chunk) {
+        if (chunk.length > 8 && chunk[0] == 0) {
+          final authOk = [0x52, 0, 0, 0, 8, 0, 0, 0, 0];
+          final ready = [0x5A, 0, 0, 0, 5, 0x49];
+          client.add([...authOk, ...ready]);
+        }
+      });
+    });
+
+    var opened = 0;
+    final dataSource = DpgsqlDataSource(
+      'Host=localhost; Port=$port; Maximum Pool Size=2',
+      onOpen: (_) {
+        opened++;
+      },
+    );
+
+    final conn1 = await dataSource.openConnection();
+    expect(opened, 1);
+    await conn1.close();
+
+    final conn2 = await dataSource.openConnection();
+    expect(opened, 1);
+    final conn3 = await dataSource.openConnection();
+    expect(opened, 2);
+
+    await conn2.close();
+    await conn3.close();
     await dataSource.dispose();
     await server.close();
   });
