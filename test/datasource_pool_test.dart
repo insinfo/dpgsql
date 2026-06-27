@@ -10,7 +10,9 @@ void main() {
       'Host=localhost;Minimum Pool Size=2;Maximum Pool Size=8;'
       'Timeout=3;Connection Idle Lifetime=7;Connection Lifetime=11;'
       'Connection Pruning Interval=13;Decode Network Types As String=true;'
-      'No Reset On Close=true',
+      'Decode Uuid As String=true;Decode Json As String=false;'
+      'No Reset On Close=true;'
+      'Infer String Parameters As Unknown=true',
     );
 
     expect(builder.minPoolSize, 2);
@@ -20,15 +22,40 @@ void main() {
     expect(builder.connectionLifetime, const Duration(seconds: 11));
     expect(builder.connectionPruningInterval, const Duration(seconds: 13));
     expect(builder.decodeNetworkTypesAsString, isTrue);
+    expect(builder.decodeUuidAsString, isTrue);
+    expect(builder.decodeJsonAsString, isFalse);
+    expect(builder.inferStringParametersAsUnknown, isTrue);
     expect(builder.noResetOnClose, isTrue);
     expect(
         DpgsqlConnectionStringBuilder('Host=localhost')
             .decodeNetworkTypesAsString,
         isTrue);
+    expect(DpgsqlConnectionStringBuilder('Host=localhost').decodeUuidAsString,
+        isTrue);
+    expect(DpgsqlConnectionStringBuilder('Host=localhost').decodeJsonAsString,
+        isFalse);
     expect(
       DpgsqlConnectionStringBuilder(
         'Host=localhost;Decode Network Types As String=false',
       ).decodeNetworkTypesAsString,
+      isFalse,
+    );
+    expect(
+      DpgsqlConnectionStringBuilder(
+        'Host=localhost;Decode Uuid As String=false',
+      ).decodeUuidAsString,
+      isFalse,
+    );
+    expect(
+      DpgsqlConnectionStringBuilder(
+        'Host=localhost;Decode Json As String=true',
+      ).decodeJsonAsString,
+      isTrue,
+    );
+    expect(
+      DpgsqlConnectionStringBuilder(
+        'Host=localhost;Infer String Parameters As Unknown=false',
+      ).inferStringParametersAsUnknown,
       isFalse,
     );
   });

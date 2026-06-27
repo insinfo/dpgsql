@@ -321,21 +321,25 @@ class ByteaHandler extends TypeHandler<Uint8List> {
 }
 
 class UuidHandler extends TypeHandler<dynamic> {
-  const UuidHandler();
+  const UuidHandler({this.decodeAsString = false});
+
+  final bool decodeAsString;
 
   @override
   int get oid => Oid.uuid;
 
   @override
-  DpgsqlUuid read(Uint8List buffer,
+  Object read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return DpgsqlUuid.parse(encoding.decode(buffer));
+      final text = encoding.decode(buffer);
+      return decodeAsString ? text : DpgsqlUuid.parse(text);
     }
     if (buffer.length != 16) {
       throw FormatException('Invalid uuid length: ${buffer.length}');
     }
-    return DpgsqlUuid(buffer);
+    final value = DpgsqlUuid(buffer);
+    return decodeAsString ? value.toString() : value;
   }
 
   @override
@@ -739,6 +743,8 @@ class TypeHandlerRegistry {
     bool useDpgsqlTypes = false,
     bool useCustomDecimal = false,
     bool decodeNetworkTypesAsString = true,
+    bool decodeUuidAsString = true,
+    bool decodeJsonAsString = false,
     TimeZoneSettings timeZone = const TimeZoneSettings.utc(),
   }) {
     register(const TextHandler());
@@ -747,7 +753,7 @@ class TypeHandlerRegistry {
     register(const FloatHandler());
     register(const DoubleHandler());
     register(const ByteaHandler());
-    register(const UuidHandler());
+    register(UuidHandler(decodeAsString: decodeUuidAsString));
     register(const BitStringHandler(Oid.bit));
     register(const BitStringHandler(Oid.varbit));
     register(InetHandler(
@@ -786,8 +792,8 @@ class TypeHandlerRegistry {
       register(const NumericDoubleHandler());
     }
 
-    register(const JsonHandler());
-    register(const JsonbHandler());
+    register(JsonHandler(decodeAsString: decodeJsonAsString));
+    register(JsonbHandler(decodeAsString: decodeJsonAsString));
     register(const PointHandler());
     register(const BoxHandler());
     register(const LSegHandler());

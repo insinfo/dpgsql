@@ -245,6 +245,33 @@ unspecified `DateTimeKind` and `timestamptz` as UTC. Dart does not have an
 equivalent to `DateTimeKind.Unspecified`, so `dpgsql` exposes the choice as
 UTC (`isUtc == true`) or local (`isUtc == false`) decoding.
 
+### ORM And Eloquent DateTime Bindings
+
+Laravel-style query builders commonly normalize `DateTime` values before they
+reach the PostgreSQL driver, formatting them as SQL date strings such as
+`2026-06-27 01:01:09`. Eloquent for Dart follows that same pattern in
+`Connection.prepareBindings()`.
+
+For compatibility with that workflow, `dpgsql` defaults untyped string
+parameters to PostgreSQL's `unknown` parameter type
+(`Infer String Parameters As Unknown=true`). PostgreSQL can then infer the
+target type from context:
+
+```sql
+INSERT INTO processo (incluido_em) VALUES ($1)
+```
+
+If `incluido_em` is `timestamp without time zone`, the value is interpreted as a
+local/civil timestamp by PostgreSQL and round-trips as the same wall-clock time
+expected by Eloquent/SALI-style applications. This avoids turning
+`2026-06-27 01:01:09` into `2026-06-27 04:01:09` by accidentally forcing a
+typed Dart `DateTime` through UTC binary timestamp encoding.
+
+Use explicit `DpgsqlDbType.text`/`varchar` or set
+`Infer String Parameters As Unknown=false` only when you intentionally want
+string parameters to be sent as textual PostgreSQL types instead of letting the
+server infer the target type.
+
 When pooling is enabled, `TimeZone` and `client_encoding` are restored after
 connection reset so a reused physical connection keeps the configured session
 semantics.

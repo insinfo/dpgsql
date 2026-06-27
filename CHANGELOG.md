@@ -24,6 +24,12 @@
 - Added PHP associative-map benchmark coverage and 3000-row result-set scenarios.
 - Added `DpgsqlCommand.forEachPgRowSync()` and cached command execution plans to reduce per-row and per-execution overhead in hot paths.
 - Optimized repeated unprepared command planning by replacing per-execution string signatures with structural cache checks.
+- Added default PostgreSQL type inference for untyped string parameters (`Infer String Parameters As Unknown=true`), improving ORM compatibility for ISO timestamp strings and other context-typed columns while preserving explicit `DpgsqlDbType.text`/`varchar` behavior.
+- Documented and validated Laravel/Eloquent-style `DateTime` bindings: ORMs may format `DateTime` as `yyyy-MM-dd HH:mm:ss`, and `dpgsql` keeps those untyped strings as PostgreSQL-inferred parameters by default so `timestamp without time zone` columns preserve wall-clock time.
+- Added `Decode Uuid As String=true` default for ORM/PDO compatibility, with `Decode Uuid As String=false` preserving Npgsql-like `DpgsqlUuid` decoding.
+- Added parsed `json`/`jsonb` decoding by default for ORM/PDO compatibility with nested model maps/lists, with `Decode Json As String=true` preserving raw JSON string decoding.
+- Added non-string configuration entry points via `DpgsqlConnection.fromConnectionStringBuilder()` and `DpgsqlDataSource.fromConnectionStringBuilder()`, allowing integrations to pass configured settings directly instead of serializing a connection string.
+- Applied configured session settings (`Search Path`, `Application Name`, `Statement Timeout`, `Lock Timeout`, and `Idle In Transaction Session Timeout`) directly from `DpgsqlConnectionStringBuilder` for both standalone connections and pooled data sources.
 - Optimized binary date/timestamp/timestamptz conversion by avoiding `Duration` allocation in hot paths.
 - Implemented text parsing for PostgreSQL `bytea` and `numeric`.
 - Implemented text parsing for PostgreSQL range types.

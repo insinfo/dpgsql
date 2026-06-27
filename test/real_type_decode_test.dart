@@ -70,7 +70,9 @@ SELECT
   });
 
   test('real connection decodes uuid, bit and varbit types', () async {
-    final conn = await openRealConnectionOrSkip();
+    final conn = await openRealConnectionOrSkip(
+      options: 'Decode Uuid As String=false',
+    );
     if (conn == null) return;
 
     try {
@@ -112,6 +114,56 @@ SELECT
           DpgsqlUuid.parse('00112233-4455-6677-8899-aabbccddeeff'));
       expect(rows.single[1], DpgsqlBitString('0101'));
       expect(rows.single[2], DpgsqlBitString('111000'));
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('real connection decodes uuid as string by default', () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      final value = await conn
+          .executeScalar("SELECT '00112233-4455-6677-8899-aabbccddeeff'::uuid");
+      expect(value, '00112233-4455-6677-8899-aabbccddeeff');
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('real connection decodes json and jsonb as Dart values by default',
+      () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      final rows = await conn.executeMaps('''
+SELECT
+  json_build_object('id', 965, 'nome', 'DEGED') AS organograma,
+  json_agg(json_build_object('id', value, 'ativo', true)) AS itens,
+  '{"a":1}'::jsonb AS payload
+FROM generate_series(1, 2) AS value
+''');
+
+      expect(rows.single['organograma'], {'id': 965, 'nome': 'DEGED'});
+      expect(rows.single['itens'], isA<List>());
+      expect(rows.single['itens'][0], {'id': 1, 'ativo': true});
+      expect(rows.single['payload'], {'a': 1});
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('json and jsonb decoding can be kept as strings', () async {
+    final conn = await openRealConnectionOrSkip(
+      options: 'Decode Json As String=true',
+    );
+    if (conn == null) return;
+
+    try {
+      final value = await conn.executeScalar("SELECT '{\"a\":1}'::jsonb");
+      expect(value, anyOf('{"a": 1}', '{"a":1}'));
     } finally {
       await conn.close();
     }
@@ -347,6 +399,73 @@ SELECT
       expect(preparedRows.single['ts'], isNull);
       expect(preparedRows.single['tstz'], isNull);
       expect(preparedRows.single['id'], 1);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('string parameters infer timestamp types by default', () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      await conn.createCommand('''
+DROP TABLE IF EXISTS dpgsql_string_timestamp_inference_test;
+CREATE TEMP TABLE dpgsql_string_timestamp_inference_test (
+  id int primary key,
+  expires_at timestamp with time zone not null,
+  created_at timestamp not null
+)
+''').executeNonQuery();
+
+      final insert = conn.createCommand('''
+INSERT INTO dpgsql_string_timestamp_inference_test
+  (id, expires_at, created_at)
+VALUES
+  (@id, @expires_at, @created_at)
+''');
+      insert.parameters.addWithValue('id', 1);
+      insert.parameters.addWithValue(
+          'expires_at', DateTime.utc(2026, 6, 26, 12, 30).toIso8601String());
+      insert.parameters.addWithValue('created_at', '2026-06-26T09:30:00');
+      expect(await insert.executeNonQuery(), 1);
+
+      final rows = await conn.executeMaps('''
+SELECT id, expires_at, created_at
+FROM dpgsql_string_timestamp_inference_test
+''');
+      expect(rows.single['id'], 1);
+      expect(rows.single['expires_at'], isA<DateTime>());
+      expect(rows.single['created_at'], isA<DateTime>());
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('string parameter type inference can be disabled', () async {
+    final conn = await openRealConnectionOrSkip(
+      options: 'Infer String Parameters As Unknown=false',
+    );
+    if (conn == null) return;
+
+    try {
+      await conn.createCommand('''
+DROP TABLE IF EXISTS dpgsql_string_timestamp_text_test;
+CREATE TEMP TABLE dpgsql_string_timestamp_text_test (
+  expires_at timestamp with time zone not null
+)
+''').executeNonQuery();
+
+      final insert = conn.createCommand('''
+INSERT INTO dpgsql_string_timestamp_text_test (expires_at)
+VALUES (@expires_at)
+''');
+      insert.parameters.addWithValue(
+          'expires_at', DateTime.utc(2026, 6, 26, 12, 30).toIso8601String());
+      await expectLater(
+        insert.executeNonQuery(),
+        throwsA(isA<PostgresException>()),
+      );
     } finally {
       await conn.close();
     }

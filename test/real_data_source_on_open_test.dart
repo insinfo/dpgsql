@@ -4,6 +4,39 @@ import 'package:test/test.dart';
 import 'test_config.dart';
 
 void main() {
+  test('connection builder applies configured session settings', () async {
+    final probe = await openRealConnectionOrSkip();
+    if (probe == null) return;
+    await probe.close();
+
+    final settings = DpgsqlConnectionStringBuilder(realConnectionString())
+      ..searchPath = 'public'
+      ..applicationName = 'dpgsql-session-settings-test'
+      ..statementTimeout = '7s'
+      ..lockTimeout = '3s'
+      ..idleInTransactionSessionTimeout = '11s';
+
+    final connection = DpgsqlConnection.fromConnectionStringBuilder(settings);
+    try {
+      await connection.open();
+      expect(await connection.executeScalar('SHOW search_path'), 'public');
+      expect(
+        await connection
+            .executeScalar("SELECT current_setting('application_name')"),
+        'dpgsql-session-settings-test',
+      );
+      expect(await connection.executeScalar('SHOW statement_timeout'), '7s');
+      expect(await connection.executeScalar('SHOW lock_timeout'), '3s');
+      expect(
+        await connection
+            .executeScalar('SHOW idle_in_transaction_session_timeout'),
+        '11s',
+      );
+    } finally {
+      await connection.close();
+    }
+  });
+
   test('data source onOpen configures pooled physical connection session',
       () async {
     final probe = await openRealConnectionOrSkip();

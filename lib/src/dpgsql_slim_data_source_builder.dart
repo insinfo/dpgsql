@@ -33,8 +33,8 @@ class DpgsqlSlimDataSourceBuilder {
     return this;
   }
 
-  DpgsqlDataSource build() => DpgsqlDataSource(
-        connectionString,
+  DpgsqlDataSource build() => DpgsqlDataSource.fromConnectionStringBuilder(
+        connectionStringBuilder,
         onOpen: onOpen,
       );
 

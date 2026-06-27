@@ -7,6 +7,7 @@ import 'package:dpgsql/src/types/dpgsql_geometric.dart';
 import 'package:dpgsql/src/types/dpgsql_range.dart';
 import 'package:dpgsql/src/types/range_handlers.dart';
 import 'package:dpgsql/src/types/dpgsql_types.dart';
+import 'package:dpgsql/src/types/oid.dart';
 import 'package:dpgsql/src/types/type_handler.dart';
 import 'package:dpgsql/src/dpgsql_db_type.dart';
 import 'package:test/test.dart';
@@ -18,7 +19,9 @@ void main() {
       const json = '{"a":1}';
       final bytes = handler.write(json);
       expect(utf8.decode(bytes), json);
-      expect(handler.read(bytes), json);
+      expect(handler.read(bytes), {'a': 1});
+      expect(const JsonHandler(decodeAsString: true).read(bytes), json);
+      expect(handler.write({'a': 1}), orderedEquals(bytes));
     });
 
     test('JsonbHandler read/write', () {
@@ -27,7 +30,9 @@ void main() {
       final bytes = handler.write(json);
       expect(bytes[0], 1); // Version 1
       expect(utf8.decode(bytes.sublist(1)), json);
-      expect(handler.read(bytes), json);
+      expect(handler.read(bytes), {'a': 1});
+      expect(const JsonbHandler(decodeAsString: true).read(bytes), json);
+      expect(handler.write({'a': 1}), orderedEquals(bytes));
     });
   });
 
@@ -96,6 +101,16 @@ void main() {
       );
     });
 
+    test('UuidHandler can decode UUIDs as strings for ORM compatibility', () {
+      const handler = UuidHandler(decodeAsString: true);
+      const text = '00112233-4455-6677-8899-aabbccddeeff';
+      final binary = handler.write(text);
+
+      expect(handler.read(binary), text);
+      expect(
+          handler.read(Uint8List.fromList(text.codeUnits), isText: true), text);
+    });
+
     test('BitStringHandler reads and writes PostgreSQL packed binary format',
         () {
       const handler = BitStringHandler(0);
@@ -133,6 +148,19 @@ void main() {
           isA<BitStringHandler>());
       expect(registry.resolveByValue(DpgsqlBitString('1010')),
           isA<BitStringHandler>());
+    });
+
+    test('TypeHandlerRegistry decodes uuid as string by default', () {
+      final text = '00112233-4455-6677-8899-aabbccddeeff';
+      final binary = const UuidHandler().write(text);
+
+      expect(TypeHandlerRegistry().resolve(Oid.uuid)!.read(binary), text);
+      expect(
+        TypeHandlerRegistry(decodeUuidAsString: false)
+            .resolve(Oid.uuid)!
+            .read(binary),
+        DpgsqlUuid.parse(text),
+      );
     });
   });
 

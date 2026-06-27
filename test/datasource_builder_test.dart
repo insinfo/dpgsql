@@ -68,5 +68,11 @@ void main() {
     expect(DpgsqlDataSource.create('Host=localhost'), isA<DpgsqlDataSource>());
     expect(DpgsqlDataSource.createFromBuilder(builder).connectionString,
         contains('Database=dart_test;'));
+    expect(DpgsqlDataSource.fromConnectionStringBuilder(builder).maxPoolSize,
+        equals(builder.maxPoolSize));
+    expect(
+      DpgsqlConnection.fromConnectionStringBuilder(builder).connectionString,
+      contains('Database=dart_test;'),
+    );
   });
 }

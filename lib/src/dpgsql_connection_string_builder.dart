@@ -110,6 +110,40 @@ class DpgsqlConnectionStringBuilder {
         value.throwOnDateTimeInfinity.toString();
   }
 
+  String get timeZoneName => timeZone.value;
+  set timeZoneName(String value) => _parameters['TimeZone'] = value;
+
+  bool get forceDecodeTimestamptzAsUTC => timeZone.forceDecodeTimestamptzAsUTC;
+  set forceDecodeTimestamptzAsUTC(bool value) =>
+      _parameters['Force Decode Timestamptz As UTC'] = value.toString();
+
+  bool get forceDecodeTimestampAsUTC => timeZone.forceDecodeTimestampAsUTC;
+  set forceDecodeTimestampAsUTC(bool value) =>
+      _parameters['Force Decode Timestamp As UTC'] = value.toString();
+
+  bool get forceDecodeDateAsUTC => timeZone.forceDecodeDateAsUTC;
+  set forceDecodeDateAsUTC(bool value) =>
+      _parameters['Force Decode Date As UTC'] = value.toString();
+
+  bool get useCurrentOffsetForLocalTimestamp =>
+      timeZone.useCurrentOffsetForLocalTimestamp;
+  set useCurrentOffsetForLocalTimestamp(bool value) =>
+      _parameters['Use Current Offset For Local Timestamp'] = value.toString();
+
+  bool get useIanaTimeZoneDatabase => timeZone.useIanaTimeZoneDatabase;
+  set useIanaTimeZoneDatabase(bool value) =>
+      _parameters['Use IANA Time Zone Database'] = value.toString();
+
+  PgTimeZoneDatabaseScope get ianaTimeZoneDatabaseScope =>
+      timeZone.ianaTimeZoneDatabaseScope;
+  set ianaTimeZoneDatabaseScope(PgTimeZoneDatabaseScope value) =>
+      _parameters['IANA Time Zone Database Scope'] =
+          pgTimeZoneDatabaseScopeName(value);
+
+  bool get throwOnDateTimeInfinity => timeZone.throwOnDateTimeInfinity;
+  set throwOnDateTimeInfinity(bool value) =>
+      _parameters['Throw On DateTime Infinity'] = value.toString();
+
   static Encoding _resolveEncoding(String name) {
     switch (_normalizeEncodingName(name)) {
       case 'UTF8':
@@ -449,6 +483,48 @@ class DpgsqlConnectionStringBuilder {
       );
   set decodeNetworkTypesAsString(bool value) =>
       _parameters['Decode Network Types As String'] = value.toString();
+
+  /// Decode PostgreSQL `uuid` values as plain strings instead of [DpgsqlUuid].
+  ///
+  /// Enabled by default for compatibility with text-oriented drivers and ORMs.
+  /// Set to false to get the stronger Npgsql-like [DpgsqlUuid] value object.
+  bool get decodeUuidAsString => _getBool(
+        true,
+        'Decode Uuid As String',
+        'DecodeUuidAsString',
+        'Uuid As String',
+        'UuidAsString',
+      );
+  set decodeUuidAsString(bool value) =>
+      _parameters['Decode Uuid As String'] = value.toString();
+
+  /// Decode PostgreSQL `json`/`jsonb` values as raw JSON strings instead of
+  /// parsed Dart values (`Map`, `List`, scalar or `null`).
+  ///
+  /// Disabled by default so ORM-style models receive nested maps/lists from
+  /// `json_agg`, `json_build_object` and JSON columns.
+  bool get decodeJsonAsString => _getBool(
+        false,
+        'Decode Json As String',
+        'DecodeJsonAsString',
+        'Json As String',
+        'JsonAsString',
+      );
+  set decodeJsonAsString(bool value) =>
+      _parameters['Decode Json As String'] = value.toString();
+
+  /// Sends untyped string parameters as PostgreSQL `unknown` by default,
+  /// allowing the server to infer column types such as timestamp, inet and uuid
+  /// in extended-query INSERT/UPDATE statements.
+  bool get inferStringParametersAsUnknown => _getBool(
+        true,
+        'Infer String Parameters As Unknown',
+        'InferStringParametersAsUnknown',
+        'String Parameters As Unknown',
+        'StringParametersAsUnknown',
+      );
+  set inferStringParametersAsUnknown(bool value) =>
+      _parameters['Infer String Parameters As Unknown'] = value.toString();
 
   String? operator [](String keyword) => _get(keyword);
   void operator []=(String keyword, String? value) {

@@ -35,6 +35,9 @@ class DpgsqlReplicationConnection {
       timeZone: builder.timeZone,
       replication: true,
       decodeNetworkTypesAsString: builder.decodeNetworkTypesAsString,
+      decodeUuidAsString: builder.decodeUuidAsString,
+      decodeJsonAsString: builder.decodeJsonAsString,
+      inferStringParametersAsUnknown: builder.inferStringParametersAsUnknown,
       // Helper to indicate replication?
       // For now, let's assume we can modify DpgsqlConnector to accept extra startup params
       // or set replication=database.

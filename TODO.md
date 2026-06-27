@@ -21,12 +21,17 @@ Diretrizes do port:
 ## Progresso 2026-06-26 (pool recovery + schema Sali)
 
 - Adicionado teste real opt-in `real_restart_recovery_test.dart`, ativado por `DPGSQL_RESTART_COMMAND`, para reiniciar/matar o PostgreSQL durante uma query em andamento e validar recuperacao do pool.
+- Corrigida compatibilidade ORM/PDO para strings ISO em colunas tipadas: parametros `String` sem `DpgsqlDbType` explicito agora usam inferencia PostgreSQL (`Infer String Parameters As Unknown=true`) e sao enviados em texto, permitindo `INSERT`/`WHERE` em `timestamp`, `timestamptz`, `inet`, etc.; quem quiser o comportamento antigo usa `Infer String Parameters As Unknown=false` ou tipo explicito `DpgsqlDbType.text`.
+- Adicionados pontos de entrada sem string para configuracao: `DpgsqlConnection.fromConnectionStringBuilder()` e `DpgsqlDataSource.fromConnectionStringBuilder()`. O adaptador `DpgsqlPDO` do `eloquent` passou a montar `DpgsqlConnectionStringBuilder` diretamente a partir do `PDOConfig`, evitando converter toda configuracao para connection string antes de abrir conexao/pool.
+- `Search Path`, `Application Name`, `Statement Timeout`, `Lock Timeout` e `Idle In Transaction Session Timeout` agora sao aplicados pelo proprio `dpgsql` a partir do `DpgsqlConnectionStringBuilder` em conexoes diretas e pooled. O `DpgsqlPDO` deixou de executar esses `SET` manualmente e usa apenas configuracao do driver; `onOpen` fica reservado para hooks customizados.
 - Executado localmente com `DPGSQL_RESTART_COMMAND='gsudo Restart-Service postgresql-x64-16 -Force'`: a query em voo falhou com EOF, a conexao foi marcada como nao reutilizavel, o pool descartou o conector quebrado e a proxima operacao conseguiu executar `SELECT 42` em nova conexao.
 - Confirmado que `SocketBinaryInput` notifica fechamento/erro do socket, `DpgsqlConnector.isConnected` passa para `false`, `DpgsqlDataSource` faz health check antes/depois do reset, e o adaptador `DpgsqlPDO` chama `markUnusable()` em falhas de conexao.
 - Lido `C:\MyDartProjects\new_sali\backend\scripts\ci\schema_sali.sql`; tipos relevantes encontrados: inteiros, `numeric`, `real`, `boolean`, `text`/`varchar`/`char`, `date`, `timestamp`, `time`, arrays `integer[]`/`text[]`, `uuid`, `jsonb` e `inet`.
 - Para o schema atual do Sali, a lacuna de tipo mais concreta era `inet`.
 - Implementados tipos e handlers para `DpgsqlInet`, `DpgsqlCidr` e `DpgsqlMacAddress`, cobrindo leitura texto/binaria, escrita binaria, `DpgsqlDbType.inet/cidr/macaddr/macaddr8`, resolucao por valor/tipo e `toJson()` textual para uso em mapas/JSON.
 - Decidido que `inet`, `cidr`, `macaddr` e `macaddr8` decodificam como `String` por padrao (`Decode Network Types As String=true`) para compatibilidade com `postgres_fork`/`postgres` e ORMs; quem quiser estilo Npgsql-like usa `Decode Network Types As String=false`.
+- Corrigida compatibilidade Sali/Eloquent para colunas `uuid`: `uuid` agora decodifica como `String` por padrao (`Decode Uuid As String=true`), evitando quebrar modelos que tipam IDs como `String?`; quem quiser o objeto forte `DpgsqlUuid` usa `Decode Uuid As String=false`.
+- Corrigida compatibilidade Sali/Eloquent para `json_agg`/`json_build_object` e colunas `json/jsonb`: JSON agora decodifica como valores Dart (`Map`/`List`/escalares) por padrao, evitando entregar strings JSON para models que esperam mapas; quem quiser texto cru usa `Decode Json As String=true` ou `PgResultMode.rawText`.
 - `DpgsqlUuid` e `DpgsqlBitString` tambem ganharam `toJson()` textual, reduzindo risco ao serializar `executeMaps()` em APIs.
 - Testes adicionados/ajustados em `types_test.dart` e `real_type_decode_test.dart` cobrindo `inet`, `cidr`, `macaddr` e parametros explicitos.
 - Validacao local: `dart analyze`, `timeout-cli.exe 30 dart test test\types_test.dart`, `timeout-cli.exe 30 dart test test\real_type_decode_test.dart -j 1 --chain-stack-traces` e `timeout-cli.exe 60 dart test test\real_restart_recovery_test.dart -j 1 --chain-stack-traces` passando.
@@ -47,7 +52,7 @@ Core implementado:
 - `PgRow`, `forEachPgRow`, `executeRows`, `executePgRows`, `executeMaps`, `executeScalar`.
 - Timezone configuravel com `latest_all` e `latest_10y`, default robusto em `latest_all` quando IANA esta ligado.
 - Encoding PostgreSQL com aliases comuns e codecs internos.
-- Tipos basicos, arrays, JSON/JSONB, geometricos, ranges, full-text search, large objects, UUID, bit/varbit e network types (`inet`, `cidr`, `macaddr`, `macaddr8`; `String` por padrao, objetos `Dpgsql*` via opt-in).
+- Tipos basicos, arrays, JSON/JSONB (`Map`/`List` por padrao, texto cru via opt-in), geometricos, ranges, full-text search, large objects, UUID (`String` por padrao, `DpgsqlUuid` via opt-in), bit/varbit e network types (`inet`, `cidr`, `macaddr`, `macaddr8`; `String` por padrao, objetos `Dpgsql*` via opt-in).
 - Scaffold de replicacao logica com mensagens principais e keepalive.
 - CI com PostgreSQL real 14/15/16/17 e Dart 3.6.2.
 

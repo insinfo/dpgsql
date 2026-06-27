@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'internal/dpgsql_connector.dart';
+import 'internal/session_settings.dart';
 import 'dpgsql_command.dart';
 import 'dpgsql_connection.dart';
 import 'dpgsql_connection_string_builder.dart';
@@ -19,6 +20,22 @@ class DpgsqlDataSource {
     this.connectionString, {
     this.onOpen,
   }) : _builder = DpgsqlConnectionStringBuilder(connectionString) {
+    _validatePoolSettings();
+    _startPruningTimer();
+  }
+
+  /// Creates a data source from an already configured builder, avoiding the
+  /// need to serialize options to a connection string.
+  DpgsqlDataSource.fromConnectionStringBuilder(
+    DpgsqlConnectionStringBuilder builder, {
+    this.onOpen,
+  })  : connectionString = builder.toString(),
+        _builder = builder {
+    _validatePoolSettings();
+    _startPruningTimer();
+  }
+
+  void _validatePoolSettings() {
     if (_builder.maxPoolSize <= 0) {
       throw ArgumentError('Maximum Pool Size must be greater than zero');
     }
@@ -27,7 +44,6 @@ class DpgsqlDataSource {
         'Minimum Pool Size cannot be greater than Maximum Pool Size',
       );
     }
-    _startPruningTimer();
   }
 
   final String connectionString;
@@ -399,54 +415,14 @@ class DpgsqlDataSource {
     DpgsqlConnector connector, {
     bool restoreStartupParameters = true,
   }) async {
-    final statements = <String>[];
-    if (restoreStartupParameters) {
-      final clientEncoding = connector.clientEncoding;
-      if (clientEncoding != null && clientEncoding.isNotEmpty) {
-        statements
-            .add("SET client_encoding = ${_quoteSqlLiteral(clientEncoding)}");
-      }
-      if (connector.timeZone.value.isNotEmpty) {
-        statements
-            .add("SET TIME ZONE ${_quoteSqlLiteral(connector.timeZone.value)}");
-      }
-    }
-    final searchPath = _builder.searchPath;
-    if (searchPath != null && searchPath.trim().isNotEmpty) {
-      statements.add('SET search_path TO $searchPath');
-    }
-    final applicationName = _builder.applicationName;
-    if (applicationName != null && applicationName.isNotEmpty) {
-      statements
-          .add('SET application_name TO ${_quoteSqlLiteral(applicationName)}');
-    }
-    final statementTimeout = _builder.statementTimeout;
-    if (statementTimeout != null && statementTimeout.isNotEmpty) {
-      statements
-          .add('SET statement_timeout = ${_quoteSqlLiteral(statementTimeout)}');
-    }
-    final lockTimeout = _builder.lockTimeout;
-    if (lockTimeout != null && lockTimeout.isNotEmpty) {
-      statements.add('SET lock_timeout = ${_quoteSqlLiteral(lockTimeout)}');
-    }
-    final idleTimeout = _builder.idleInTransactionSessionTimeout;
-    if (idleTimeout != null && idleTimeout.isNotEmpty) {
-      statements.add(
-        'SET idle_in_transaction_session_timeout = ${_quoteSqlLiteral(idleTimeout)}',
-      );
-    }
-
-    for (final sql in statements) {
-      try {
-        await conn.createCommand(sql).executeNonQuery().timeout(
-              _poolMaintenanceTimeout,
-            );
-      } catch (_) {}
-    }
-  }
-
-  static String _quoteSqlLiteral(String value) {
-    return "'${value.replaceAll("'", "''")}'";
+    await applyConfiguredSessionSettings(
+      conn,
+      _builder,
+      connector: connector,
+      restoreStartupParameters: restoreStartupParameters,
+      timeout: _poolMaintenanceTimeout,
+      ignoreErrors: true,
+    );
   }
 
   DpgsqlConnector _createConnector() {
@@ -464,6 +440,9 @@ class DpgsqlDataSource {
       maxAutoPrepare: _builder.maxAutoPrepare,
       autoPrepareMinUsages: _builder.autoPrepareMinUsages,
       decodeNetworkTypesAsString: _builder.decodeNetworkTypesAsString,
+      decodeUuidAsString: _builder.decodeUuidAsString,
+      decodeJsonAsString: _builder.decodeJsonAsString,
+      inferStringParametersAsUnknown: _builder.inferStringParametersAsUnknown,
     );
   }
 
@@ -520,7 +499,8 @@ class DpgsqlDataSource {
   static DpgsqlDataSource createFromBuilder(
     DpgsqlConnectionStringBuilder connectionStringBuilder,
   ) {
-    return DpgsqlDataSource(connectionStringBuilder.toString());
+    return DpgsqlDataSource.fromConnectionStringBuilder(
+        connectionStringBuilder);
   }
 
   void _throwIfDisposed() {

@@ -17,6 +17,8 @@ import '../types/oid.dart';
 import '../types/type_handler.dart';
 import '../dpgsql_batch.dart';
 import '../dpgsql_batch_command.dart';
+import '../dpgsql_db_type.dart';
+import '../dpgsql_parameter.dart';
 import '../crypto/crypto.dart';
 import 'dpgsql_data_reader_impl.dart';
 import 'scram_authenticator.dart';
@@ -47,6 +49,9 @@ class DpgsqlConnector {
     int maxAutoPrepare = 0,
     int autoPrepareMinUsages = 5,
     bool decodeNetworkTypesAsString = true,
+    bool decodeUuidAsString = true,
+    bool decodeJsonAsString = false,
+    this.inferStringParametersAsUnknown = true,
   })  : timeZone = timeZone ?? const TimeZoneSettings.utc(),
         preparedStatementManager = PreparedStatementManager(
           maxAutoPrepared: maxAutoPrepare,
@@ -55,6 +60,8 @@ class DpgsqlConnector {
         _typeRegistry = TypeHandlerRegistry(
           timeZone: timeZone ?? const TimeZoneSettings.utc(),
           decodeNetworkTypesAsString: decodeNetworkTypesAsString,
+          decodeUuidAsString: decodeUuidAsString,
+          decodeJsonAsString: decodeJsonAsString,
         );
 
   final String host;
@@ -68,6 +75,7 @@ class DpgsqlConnector {
   final String? clientEncoding;
   final TimeZoneSettings timeZone;
   final bool replication;
+  final bool inferStringParametersAsUnknown;
   final PreparedStatementManager preparedStatementManager;
 
   Socket? _socket;
@@ -91,6 +99,67 @@ class DpgsqlConnector {
   int _backendSecretKey = 0;
 
   TypeHandlerRegistry get typeRegistry => _typeRegistry;
+
+  TypeHandler? _resolveParameterHandler(DpgsqlParameter parameter) {
+    final value = parameter.value;
+    if (value == null) {
+      return null;
+    }
+
+    final dbType = parameter.dpgsqlDbType;
+    if (dbType != null) {
+      if (dbType == DpgsqlDbType.unknown) {
+        return null;
+      }
+      return _typeRegistry.resolveByDpgsqlDbType(dbType);
+    }
+
+    if (inferStringParametersAsUnknown && value is String) {
+      return null;
+    }
+
+    return _typeRegistry.resolveByValue(value);
+  }
+
+  int _parameterOid(TypeHandler? handler) => handler?.oid ?? 0;
+
+  void _encodeParameter(
+    DpgsqlParameter parameter,
+    TypeHandler? handler,
+    List<Uint8List?> values,
+    List<int> formatCodes,
+  ) {
+    final value = parameter.value;
+    if (value == null) {
+      values.add(null);
+      formatCodes.add(0);
+      return;
+    }
+
+    if (handler != null) {
+      values.add(handler.write(value));
+      formatCodes.add(1);
+      return;
+    }
+
+    values.add(Uint8List.fromList(encoding.encode(value.toString())));
+    formatCodes.add(0);
+  }
+
+  void _encodeParameters(
+    DpgsqlParameterCollection parameters,
+    List<Uint8List?> values,
+    List<int> formatCodes,
+  ) {
+    for (final parameter in parameters) {
+      _encodeParameter(
+        parameter,
+        _resolveParameterHandler(parameter),
+        values,
+        formatCodes,
+      );
+    }
+  }
 
   /// Opens the connection.
   Future<void> open() async {
@@ -574,18 +643,7 @@ class DpgsqlConnector {
     // 1. Parse (Prepare)
     final paramOids = <int>[];
     for (final p in parameters) {
-      if (p.value != null) {
-        TypeHandler? handler;
-        if (p.dpgsqlDbType != null) {
-          handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-        }
-        if (handler == null) {
-          handler = _typeRegistry.resolveByValue(p.value);
-        }
-        paramOids.add(handler?.oid ?? 0);
-      } else {
-        paramOids.add(0); // Unknown/Unspecified
-      }
+      paramOids.add(_parameterOid(_resolveParameterHandler(p)));
     }
 
     await _frontendMessages!.writeParse(
@@ -646,19 +704,12 @@ class DpgsqlConnector {
 
       final paramHandlers = <TypeHandler?>[];
       for (final p in paramsToUse) {
-        TypeHandler? handler;
-        if (p.value != null) {
-          if (p.dpgsqlDbType != null) {
-            handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-          }
-          handler ??= _typeRegistry.resolveByValue(p.value);
-        }
-        paramHandlers.add(handler);
+        paramHandlers.add(_resolveParameterHandler(p));
       }
 
       final paramOids = <int>[];
       for (final handler in paramHandlers) {
-        paramOids.add(handler?.oid ?? 0);
+        paramOids.add(_parameterOid(handler));
       }
 
       var statementNameToUse = statementName;
@@ -714,20 +765,7 @@ class DpgsqlConnector {
       final formatCodes = <int>[];
 
       for (var i = 0; i < paramsToUse.length; i++) {
-        final p = paramsToUse[i];
-        if (p.value == null) {
-          values.add(null);
-          formatCodes.add(0); // null
-        } else {
-          final handler = paramHandlers[i];
-          if (handler != null) {
-            values.add(handler.write(p.value));
-            formatCodes.add(1); // Binary
-          } else {
-            values.add(Uint8List.fromList(encoding.encode(p.value.toString())));
-            formatCodes.add(0); // Text
-          }
-        }
+        _encodeParameter(paramsToUse[i], paramHandlers[i], values, formatCodes);
       }
 
       await _frontendMessages!.writeBind(
@@ -1029,27 +1067,7 @@ class DpgsqlConnector {
     final parameterValues = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
 
-    for (final p in params) {
-      if (p.value == null) {
-        parameterValues.add(null);
-        parameterFormatCodes.add(0);
-        continue;
-      }
-
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      handler ??= _typeRegistry.resolveByValue(p.value);
-
-      if (handler != null) {
-        parameterValues.add(handler.write(p.value));
-        parameterFormatCodes.add(1);
-      } else {
-        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
-        parameterFormatCodes.add(0);
-      }
-    }
+    _encodeParameters(params, parameterValues, parameterFormatCodes);
 
     await _frontendMessages!.writeBind(
       portalName: '',
@@ -1119,27 +1137,7 @@ class DpgsqlConnector {
     final parameterValues = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
 
-    for (final p in params) {
-      if (p.value == null) {
-        parameterValues.add(null);
-        parameterFormatCodes.add(0);
-        continue;
-      }
-
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      handler ??= _typeRegistry.resolveByValue(p.value);
-
-      if (handler != null) {
-        parameterValues.add(handler.write(p.value));
-        parameterFormatCodes.add(1);
-      } else {
-        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
-        parameterFormatCodes.add(0);
-      }
-    }
+    _encodeParameters(params, parameterValues, parameterFormatCodes);
 
     await _frontendMessages!.writeBind(
       portalName: '',
@@ -1201,27 +1199,7 @@ class DpgsqlConnector {
     final parameterValues = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
 
-    for (final p in params) {
-      if (p.value == null) {
-        parameterValues.add(null);
-        parameterFormatCodes.add(0);
-        continue;
-      }
-
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      handler ??= _typeRegistry.resolveByValue(p.value);
-
-      if (handler != null) {
-        parameterValues.add(handler.write(p.value));
-        parameterFormatCodes.add(1);
-      } else {
-        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
-        parameterFormatCodes.add(0);
-      }
-    }
+    _encodeParameters(params, parameterValues, parameterFormatCodes);
 
     await _frontendMessages!.writeBind(
       portalName: '',
@@ -1296,27 +1274,7 @@ class DpgsqlConnector {
     final parameterValues = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
 
-    for (final p in params) {
-      if (p.value == null) {
-        parameterValues.add(null);
-        parameterFormatCodes.add(0);
-        continue;
-      }
-
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      handler ??= _typeRegistry.resolveByValue(p.value);
-
-      if (handler != null) {
-        parameterValues.add(handler.write(p.value));
-        parameterFormatCodes.add(1);
-      } else {
-        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
-        parameterFormatCodes.add(0);
-      }
-    }
+    _encodeParameters(params, parameterValues, parameterFormatCodes);
 
     await _frontendMessages!.writeBind(
       portalName: '',
@@ -1393,27 +1351,7 @@ class DpgsqlConnector {
     final parameterValues = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
 
-    for (final p in params) {
-      if (p.value == null) {
-        parameterValues.add(null);
-        parameterFormatCodes.add(0);
-        continue;
-      }
-
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      handler ??= _typeRegistry.resolveByValue(p.value);
-
-      if (handler != null) {
-        parameterValues.add(handler.write(p.value));
-        parameterFormatCodes.add(1);
-      } else {
-        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
-        parameterFormatCodes.add(0);
-      }
-    }
+    _encodeParameters(params, parameterValues, parameterFormatCodes);
 
     await _frontendMessages!.writeBind(
       portalName: '',
@@ -1486,27 +1424,7 @@ class DpgsqlConnector {
     final parameterValues = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
 
-    for (final p in params) {
-      if (p.value == null) {
-        parameterValues.add(null);
-        parameterFormatCodes.add(0);
-        continue;
-      }
-
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      handler ??= _typeRegistry.resolveByValue(p.value);
-
-      if (handler != null) {
-        parameterValues.add(handler.write(p.value));
-        parameterFormatCodes.add(1);
-      } else {
-        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
-        parameterFormatCodes.add(0);
-      }
-    }
+    _encodeParameters(params, parameterValues, parameterFormatCodes);
 
     await _frontendMessages!.writeBind(
       portalName: '',
@@ -1574,27 +1492,7 @@ class DpgsqlConnector {
     final parameterValues = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
 
-    for (final p in params) {
-      if (p.value == null) {
-        parameterValues.add(null);
-        parameterFormatCodes.add(0);
-        continue;
-      }
-
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      handler ??= _typeRegistry.resolveByValue(p.value);
-
-      if (handler != null) {
-        parameterValues.add(handler.write(p.value));
-        parameterFormatCodes.add(1);
-      } else {
-        parameterValues.add(Uint8List.fromList(encoding.encode('${p.value}')));
-        parameterFormatCodes.add(0);
-      }
-    }
+    _encodeParameters(params, parameterValues, parameterFormatCodes);
 
     await _frontendMessages!.writeBind(
       portalName: '',
@@ -2144,19 +2042,11 @@ class DpgsqlConnector {
 
     // Collect parameter OIDs and values
     final paramOids = <int>[];
-    final paramValues = <dynamic>[];
     final paramHandlers = <TypeHandler?>[];
 
     for (final p in params) {
-      TypeHandler? handler;
-      if (p.dpgsqlDbType != null) {
-        handler = _typeRegistry.resolveByDpgsqlDbType(p.dpgsqlDbType!);
-      }
-      if (handler == null) {
-        handler = _typeRegistry.resolveByValue(p.value);
-      }
-      paramOids.add(handler?.oid ?? 0);
-      paramValues.add(p.value);
+      final handler = _resolveParameterHandler(p);
+      paramOids.add(_parameterOid(handler));
       paramHandlers.add(handler);
     }
 
@@ -2171,21 +2061,15 @@ class DpgsqlConnector {
     }
 
     // Write Bind
-    final encodedParams = <List<int>?>[];
+    final encodedParams = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
-    for (var i = 0; i < paramValues.length; i++) {
-      final value = paramValues[i];
-      final handler = paramHandlers[i];
-      if (value == null) {
-        encodedParams.add(null);
-        parameterFormatCodes.add(0);
-      } else if (handler != null) {
-        encodedParams.add(handler.write(value));
-        parameterFormatCodes.add(1);
-      } else {
-        encodedParams.add(encoding.encode(value.toString()));
-        parameterFormatCodes.add(0);
-      }
+    for (var i = 0; i < params.length; i++) {
+      _encodeParameter(
+        params[i],
+        paramHandlers[i],
+        encodedParams,
+        parameterFormatCodes,
+      );
     }
 
     await _frontendMessages!.writeBind(

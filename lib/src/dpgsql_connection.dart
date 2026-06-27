@@ -12,6 +12,7 @@ import 'dpgsql_connection_string_builder.dart';
 import 'data/pg_row.dart';
 import 'isolation_level.dart';
 import 'internal/dpgsql_connector.dart';
+import 'internal/session_settings.dart';
 import 'protocol/backend_messages.dart';
 import 'internal/pending_command.dart';
 import 'pg_result_mode.dart';
@@ -21,9 +22,13 @@ enum ConnectionState { closed, open, connecting, executing, fetching }
 /// Represents an open connection to a PostgreSQL database.
 /// Porting DpgsqlConnection.cs
 class DpgsqlConnection {
-  DpgsqlConnection(this.connectionString) : _returnToPoolAction = null;
+  DpgsqlConnection(String connectionString)
+      : connectionString = connectionString,
+        _connectionStringBuilder = null,
+        _returnToPoolAction = null;
 
   final String connectionString;
+  final DpgsqlConnectionStringBuilder? _connectionStringBuilder;
   DpgsqlConnector? _connector;
   ConnectionState _state = ConnectionState.closed;
   int _activeReaderCount = 0;
@@ -57,7 +62,16 @@ class DpgsqlConnection {
 
   DpgsqlConnection.fromConnector(this._connector, this._returnToPoolAction)
       : connectionString = '',
+        _connectionStringBuilder = null,
         _state = ConnectionState.open;
+
+  /// Creates a connection from an already configured builder, avoiding the
+  /// need to serialize options to a connection string.
+  DpgsqlConnection.fromConnectionStringBuilder(
+    DpgsqlConnectionStringBuilder builder,
+  )   : connectionString = builder.toString(),
+        _connectionStringBuilder = builder,
+        _returnToPoolAction = null;
 
   final void Function(DpgsqlConnector)? _returnToPoolAction;
 
@@ -78,7 +92,8 @@ class DpgsqlConnection {
     _state = ConnectionState.connecting;
 
     try {
-      final builder = DpgsqlConnectionStringBuilder(connectionString);
+      final builder = _connectionStringBuilder ??
+          DpgsqlConnectionStringBuilder(connectionString);
 
       _connector = DpgsqlConnector(
         host: builder.host,
@@ -94,6 +109,9 @@ class DpgsqlConnection {
         maxAutoPrepare: builder.maxAutoPrepare,
         autoPrepareMinUsages: builder.autoPrepareMinUsages,
         decodeNetworkTypesAsString: builder.decodeNetworkTypesAsString,
+        decodeUuidAsString: builder.decodeUuidAsString,
+        decodeJsonAsString: builder.decodeJsonAsString,
+        inferStringParametersAsUnknown: builder.inferStringParametersAsUnknown,
       );
 
       _connector!.notifications.listen((e) {
@@ -105,7 +123,16 @@ class DpgsqlConnection {
 
       await _connector!.open();
       _state = ConnectionState.open;
+      await applyConfiguredSessionSettings(
+        this,
+        builder,
+        restoreStartupParameters: false,
+        timeout: defaultSessionSettingsTimeout,
+      );
     } catch (e) {
+      try {
+        await _connector?.close();
+      } catch (_) {}
       _state = ConnectionState.closed;
       _connector = null;
       rethrow;

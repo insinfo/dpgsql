@@ -38,8 +38,8 @@ class DpgsqlDataSourceBuilder {
   }
 
   /// Builds a data source using the current connection string settings.
-  DpgsqlDataSource build() => DpgsqlDataSource(
-        connectionString,
+  DpgsqlDataSource build() => DpgsqlDataSource.fromConnectionStringBuilder(
+        connectionStringBuilder,
         onOpen: onOpen,
       );
 }
