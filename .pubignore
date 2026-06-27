@@ -1,0 +1,11 @@
+.github/
+.dart_tool/
+
+benchmarks/
+referencias/
+scripts/
+test/
+
+TODO.md
+doc_timezone.md
+pubspec.lock

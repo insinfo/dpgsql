@@ -4,11 +4,8 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:meta/meta.dart';
-
 /// Represents a PostgreSQL Interval type.
 /// (Months, Days, Time in microseconds)
-@immutable
 class DpgsqlInterval {
   final int months;
   final int days;
@@ -115,7 +112,6 @@ class DpgsqlInterval {
 
 /// Represents a PostgreSQL Date type.
 /// Stored as days since 2000-01-01.
-@immutable
 class DpgsqlDate {
   final int days;
 
@@ -151,7 +147,6 @@ class DpgsqlDate {
 
 /// Represents a PostgreSQL Time type (without time zone).
 /// Stored as microseconds since midnight.
-@immutable
 class DpgsqlTime {
   final int microseconds;
 
@@ -197,7 +192,6 @@ class DpgsqlTime {
 
 /// Represents a PostgreSQL Timestamp type (without time zone).
 /// Stored as microseconds since 2000-01-01.
-@immutable
 class DpgsqlTimestamp {
   final int microseconds;
 
@@ -254,7 +248,6 @@ class DpgsqlTimestamp {
 
 /// Represents a PostgreSQL Money type.
 /// Stored as a 64-bit integer (usually cents or equivalent).
-@immutable
 class DpgsqlMoney {
   final int value;
 
@@ -306,7 +299,6 @@ class DpgsqlMoney {
 ///
 /// Dart has no built-in Guid type, so this mirrors Npgsql's Guid mapping with
 /// a compact 16-byte value and canonical lower-case text formatting.
-@immutable
 class DpgsqlUuid {
   final Uint8List _bytes;
 
@@ -402,7 +394,6 @@ class DpgsqlUuid {
 /// PostgreSQL binary format stores a 32-bit bit length followed by packed bits,
 /// most-significant bit first in each byte. The public representation keeps the
 /// exact textual bit sequence for simple equality and formatting.
-@immutable
 class DpgsqlBitString {
   final String value;
 
@@ -441,7 +432,6 @@ class DpgsqlBitString {
 /// PostgreSQL binary format stores address family, prefix length and raw IP
 /// bytes. The public representation keeps the textual address and optional
 /// prefix so maps can still serialize cleanly through [toJson].
-@immutable
 class DpgsqlInet {
   DpgsqlInet(String address, {int? prefixLength})
       : address = _normalizeAddress(address),
@@ -526,7 +516,6 @@ class DpgsqlInet {
 }
 
 /// Represents PostgreSQL cidr values.
-@immutable
 class DpgsqlCidr extends DpgsqlInet {
   DpgsqlCidr(super.address, {required int prefixLength})
       : super(prefixLength: prefixLength);
@@ -541,7 +530,6 @@ class DpgsqlCidr extends DpgsqlInet {
 }
 
 /// Represents PostgreSQL macaddr/macaddr8 values.
-@immutable
 class DpgsqlMacAddress {
   DpgsqlMacAddress(List<int> bytes)
       : _bytes = Uint8List.fromList(_validateBytes(bytes));
@@ -622,7 +610,6 @@ class DpgsqlMacAddress {
 /// Represents a PostgreSQL Numeric/Decimal type.
 /// Postgres Numeric is arbitrary precision base-10000.
 /// We store the raw components.
-@immutable
 class DpgsqlDecimal {
   final int ndigits;
   final int weight;

@@ -35,13 +35,11 @@ Implemented areas include:
 
 ## Installation
 
-Until the package is published, depend on the Git repository:
+Use the published package:
 
 ```yaml
 dependencies:
-  dpgsql:
-    git:
-      url: https://github.com/insinfo/dpgsql.git
+  dpgsql: ^1.0.0
 ```
 
 Then run:
