@@ -93,6 +93,7 @@ class DpgsqlConnection {
         timeZone: builder.timeZone,
         maxAutoPrepare: builder.maxAutoPrepare,
         autoPrepareMinUsages: builder.autoPrepareMinUsages,
+        decodeNetworkTypesAsString: builder.decodeNetworkTypesAsString,
       );
 
       _connector!.notifications.listen((e) {

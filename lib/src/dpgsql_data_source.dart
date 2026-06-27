@@ -408,6 +408,7 @@ class DpgsqlDataSource {
       timeZone: _builder.timeZone,
       maxAutoPrepare: _builder.maxAutoPrepare,
       autoPrepareMinUsages: _builder.autoPrepareMinUsages,
+      decodeNetworkTypesAsString: _builder.decodeNetworkTypesAsString,
     );
   }
 

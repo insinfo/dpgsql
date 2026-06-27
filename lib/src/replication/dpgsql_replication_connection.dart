@@ -34,6 +34,7 @@ class DpgsqlReplicationConnection {
       clientEncoding: builder.postgresClientEncoding,
       timeZone: builder.timeZone,
       replication: true,
+      decodeNetworkTypesAsString: builder.decodeNetworkTypesAsString,
       // Helper to indicate replication?
       // For now, let's assume we can modify DpgsqlConnector to accept extra startup params
       // or set replication=database.

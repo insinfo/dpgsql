@@ -118,7 +118,9 @@ SELECT
   });
 
   test('real connection decodes inet, cidr and macaddr types', () async {
-    final conn = await openRealConnectionOrSkip();
+    final conn = await openRealConnectionOrSkip(
+      options: 'Decode Network Types As String=false',
+    );
     if (conn == null) return;
 
     try {
@@ -163,6 +165,27 @@ SELECT
       expect(rows.single[0], DpgsqlInet.parse('172.16.1.20'));
       expect(rows.single[1], DpgsqlCidr.parse('172.16.0.0/12'));
       expect(rows.single[2], DpgsqlMacAddress.parse('08:00:2b:01:02:03'));
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test('network types can be decoded as strings for ORM compatibility',
+      () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+
+    try {
+      final rows = await conn.executeMaps('''
+SELECT
+  '192.168.10.5'::inet AS ip,
+  '10.0.0.0/8'::cidr AS network,
+  '08:00:2b:01:02:03'::macaddr AS mac
+''');
+
+      expect(rows.single['ip'], '192.168.10.5');
+      expect(rows.single['network'], '10.0.0.0/8');
+      expect(rows.single['mac'], '08:00:2b:01:02:03');
     } finally {
       await conn.close();
     }

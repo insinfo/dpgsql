@@ -26,7 +26,7 @@ Implemented areas include:
 - Binary COPY import/export.
 - PostgreSQL notifications through `LISTEN`/`NOTIFY`.
 - SSL modes and startup `client_encoding`.
-- Type handlers for scalar types, arrays, ranges, JSON/JSONB, geometric types, timestamps, intervals, numeric, money, and bytea.
+- Type handlers for scalar types, arrays, ranges, JSON/JSONB, geometric types, timestamps, intervals, numeric, money, bytea, UUID, bit/varbit, and network address types.
 - Large Object API.
 - Logical replication protocol scaffolding.
 - Benchmarks against Dart AOT and PHP PostgreSQL drivers.
@@ -178,6 +178,24 @@ final connection = DpgsqlConnection(
 ```
 
 Supported local codecs include UTF-8, ASCII, LATIN1-10, ISO-8859-5/6/7/8, WIN1250-1254, WIN1256, KOI8-R, KOI8-U, BIG5, and GBK. Unsupported PostgreSQL encodings fail early instead of silently falling back to UTF-8.
+
+## Network Address Types
+
+For compatibility with text-oriented Dart PostgreSQL drivers and ORM/PDO-style
+code, PostgreSQL `inet`, `cidr`, `macaddr`, and `macaddr8` values decode as
+plain `String` by default.
+
+Applications that prefer the more Npgsql-like typed values can opt in:
+
+```dart
+final connection = DpgsqlConnection(
+  'Host=127.0.0.1;Database=postgres;Username=dart;Password=dart;'
+  'Decode Network Types As String=false',
+);
+```
+
+With that option disabled, the driver returns `DpgsqlInet`, `DpgsqlCidr`, and
+`DpgsqlMacAddress`.
 
 ## Timestamp And Time Zone
 

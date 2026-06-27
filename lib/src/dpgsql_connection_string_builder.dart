@@ -377,6 +377,21 @@ class DpgsqlConnectionStringBuilder {
   set autoPrepareMinUsages(int value) =>
       _parameters['Auto Prepare Min Usages'] = value.toString();
 
+  /// Decode PostgreSQL network address types (`inet`, `cidr`, `macaddr`,
+  /// `macaddr8`) as plain strings instead of Dpgsql network value objects.
+  ///
+  /// This is useful for ORM/PDO compatibility where callers expect the same
+  /// behavior as text-oriented drivers.
+  bool get decodeNetworkTypesAsString => _getBool(
+        true,
+        'Decode Network Types As String',
+        'DecodeNetworkTypesAsString',
+        'Network Types As String',
+        'NetworkTypesAsString',
+      );
+  set decodeNetworkTypesAsString(bool value) =>
+      _parameters['Decode Network Types As String'] = value.toString();
+
   String? operator [](String keyword) => _get(keyword);
   void operator []=(String keyword, String? value) {
     if (value == null) {

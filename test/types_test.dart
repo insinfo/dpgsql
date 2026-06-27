@@ -185,6 +185,19 @@ void main() {
       expect(registry.resolveByDpgsqlDbType(DpgsqlDbType.macaddr8),
           isA<MacAddressHandler>());
     });
+
+    test('TypeHandlerRegistry can decode network types as strings', () {
+      final registry = TypeHandlerRegistry(decodeNetworkTypesAsString: true);
+      final handler = registry.resolveByDpgsqlDbType(DpgsqlDbType.inet)!;
+
+      expect(
+        handler.read(Uint8List.fromList('192.168.0.10'.codeUnits),
+            isText: true),
+        '192.168.0.10',
+      );
+      expect(handler.read(const InetHandler(0).write('192.168.0.10')),
+          '192.168.0.10');
+    });
   });
 
   group('Geometric Types', () {

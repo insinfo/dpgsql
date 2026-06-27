@@ -46,6 +46,7 @@ class DpgsqlConnector {
     this.replication = false,
     int maxAutoPrepare = 0,
     int autoPrepareMinUsages = 5,
+    bool decodeNetworkTypesAsString = true,
   })  : timeZone = timeZone ?? const TimeZoneSettings.utc(),
         preparedStatementManager = PreparedStatementManager(
           maxAutoPrepared: maxAutoPrepare,
@@ -53,6 +54,7 @@ class DpgsqlConnector {
         ),
         _typeRegistry = TypeHandlerRegistry(
           timeZone: timeZone ?? const TimeZoneSettings.utc(),
+          decodeNetworkTypesAsString: decodeNetworkTypesAsString,
         );
 
   final String host;

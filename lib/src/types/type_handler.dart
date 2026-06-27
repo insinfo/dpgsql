@@ -410,19 +410,22 @@ class BitStringHandler extends TypeHandler<dynamic> {
 }
 
 class InetHandler extends TypeHandler<dynamic> {
-  const InetHandler(this.oid);
+  const InetHandler(this.oid, {this.decodeAsString = false});
 
   @override
   final int oid;
+  final bool decodeAsString;
 
   bool get _isCidr => oid == Oid.cidr;
 
   @override
-  DpgsqlInet read(Uint8List buffer,
+  dynamic read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
       final text = encoding.decode(buffer);
-      return _isCidr ? DpgsqlCidr.parse(text) : DpgsqlInet.parse(text);
+      return decodeAsString
+          ? text
+          : (_isCidr ? DpgsqlCidr.parse(text) : DpgsqlInet.parse(text));
     }
     if (buffer.length < 4) {
       throw FormatException('Invalid inet/cidr length: ${buffer.length}');
@@ -449,9 +452,10 @@ class InetHandler extends TypeHandler<dynamic> {
       _ => throw FormatException('Invalid inet/cidr address family: $family'),
     };
 
-    return _isCidr
+    final value = _isCidr
         ? DpgsqlCidr(address, prefixLength: prefixLength)
         : DpgsqlInet(address, prefixLength: prefixLength);
+    return decodeAsString ? value.toString() : value;
   }
 
   @override
@@ -473,23 +477,26 @@ class InetHandler extends TypeHandler<dynamic> {
 }
 
 class MacAddressHandler extends TypeHandler<dynamic> {
-  const MacAddressHandler(this.oid);
+  const MacAddressHandler(this.oid, {this.decodeAsString = false});
 
   @override
   final int oid;
+  final bool decodeAsString;
 
   int get _expectedLength => oid == Oid.macaddr8 ? 8 : 6;
 
   @override
-  DpgsqlMacAddress read(Uint8List buffer,
+  dynamic read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return DpgsqlMacAddress.parse(encoding.decode(buffer));
+      final text = encoding.decode(buffer);
+      return decodeAsString ? text : DpgsqlMacAddress.parse(text);
     }
     if (buffer.length != _expectedLength) {
       throw FormatException('Invalid macaddr payload length: ${buffer.length}');
     }
-    return DpgsqlMacAddress(buffer);
+    final value = DpgsqlMacAddress(buffer);
+    return decodeAsString ? value.toString() : value;
   }
 
   @override
@@ -731,6 +738,7 @@ class TypeHandlerRegistry {
   TypeHandlerRegistry({
     bool useDpgsqlTypes = false,
     bool useCustomDecimal = false,
+    bool decodeNetworkTypesAsString = true,
     TimeZoneSettings timeZone = const TimeZoneSettings.utc(),
   }) {
     register(const TextHandler());
@@ -742,10 +750,22 @@ class TypeHandlerRegistry {
     register(const UuidHandler());
     register(const BitStringHandler(Oid.bit));
     register(const BitStringHandler(Oid.varbit));
-    register(const InetHandler(Oid.inet));
-    register(const InetHandler(Oid.cidr));
-    register(const MacAddressHandler(Oid.macaddr));
-    register(const MacAddressHandler(Oid.macaddr8));
+    register(InetHandler(
+      Oid.inet,
+      decodeAsString: decodeNetworkTypesAsString,
+    ));
+    register(InetHandler(
+      Oid.cidr,
+      decodeAsString: decodeNetworkTypesAsString,
+    ));
+    register(MacAddressHandler(
+      Oid.macaddr,
+      decodeAsString: decodeNetworkTypesAsString,
+    ));
+    register(MacAddressHandler(
+      Oid.macaddr8,
+      decodeAsString: decodeNetworkTypesAsString,
+    ));
 
     if (useDpgsqlTypes) {
       register(const DpgsqlDateHandler());

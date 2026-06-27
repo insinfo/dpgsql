@@ -26,6 +26,7 @@ Diretrizes do port:
 - Lido `C:\MyDartProjects\new_sali\backend\scripts\ci\schema_sali.sql`; tipos relevantes encontrados: inteiros, `numeric`, `real`, `boolean`, `text`/`varchar`/`char`, `date`, `timestamp`, `time`, arrays `integer[]`/`text[]`, `uuid`, `jsonb` e `inet`.
 - Para o schema atual do Sali, a lacuna de tipo mais concreta era `inet`.
 - Implementados tipos e handlers para `DpgsqlInet`, `DpgsqlCidr` e `DpgsqlMacAddress`, cobrindo leitura texto/binaria, escrita binaria, `DpgsqlDbType.inet/cidr/macaddr/macaddr8`, resolucao por valor/tipo e `toJson()` textual para uso em mapas/JSON.
+- Decidido que `inet`, `cidr`, `macaddr` e `macaddr8` decodificam como `String` por padrao (`Decode Network Types As String=true`) para compatibilidade com `postgres_fork`/`postgres` e ORMs; quem quiser estilo Npgsql-like usa `Decode Network Types As String=false`.
 - `DpgsqlUuid` e `DpgsqlBitString` tambem ganharam `toJson()` textual, reduzindo risco ao serializar `executeMaps()` em APIs.
 - Testes adicionados/ajustados em `types_test.dart` e `real_type_decode_test.dart` cobrindo `inet`, `cidr`, `macaddr` e parametros explicitos.
 - Validacao local: `dart analyze`, `timeout-cli.exe 30 dart test test\types_test.dart`, `timeout-cli.exe 30 dart test test\real_type_decode_test.dart -j 1 --chain-stack-traces` e `timeout-cli.exe 60 dart test test\real_restart_recovery_test.dart -j 1 --chain-stack-traces` passando.
@@ -45,7 +46,7 @@ Core implementado:
 - `PgRow`, `forEachPgRow`, `executeRows`, `executePgRows`, `executeMaps`, `executeScalar`.
 - Timezone configuravel com `latest_all` e `latest_10y`, default robusto em `latest_all` quando IANA esta ligado.
 - Encoding PostgreSQL com aliases comuns e codecs internos.
-- Tipos basicos, arrays, JSON/JSONB, geometricos, ranges, full-text search, large objects, UUID, bit/varbit e network types (`inet`, `cidr`, `macaddr`, `macaddr8`).
+- Tipos basicos, arrays, JSON/JSONB, geometricos, ranges, full-text search, large objects, UUID, bit/varbit e network types (`inet`, `cidr`, `macaddr`, `macaddr8`; `String` por padrao, objetos `Dpgsql*` via opt-in).
 - Scaffold de replicacao logica com mensagens principais e keepalive.
 - CI com PostgreSQL real 14/15/16/17 e Dart 3.6.2.
 
@@ -165,7 +166,7 @@ Feito:
 Pendente:
 
 - [ ] Refinar `numeric`/`decimal` dedicado e `money`.
-- [ ] `inet`, `cidr`, `macaddr`, `macaddr8`.
+- [x] `inet`, `cidr`, `macaddr`, `macaddr8` com modo compatibilidade `String` por padrao e modo tipado por opt-in.
 - [ ] `hstore`.
 - [ ] `ltree`.
 - [ ] `pg_lsn`.

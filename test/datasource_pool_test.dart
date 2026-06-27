@@ -9,7 +9,7 @@ void main() {
     final builder = DpgsqlConnectionStringBuilder(
       'Host=localhost;Minimum Pool Size=2;Maximum Pool Size=8;'
       'Timeout=3;Connection Idle Lifetime=7;Connection Lifetime=11;'
-      'Connection Pruning Interval=13',
+      'Connection Pruning Interval=13;Decode Network Types As String=true',
     );
 
     expect(builder.minPoolSize, 2);
@@ -18,6 +18,17 @@ void main() {
     expect(builder.connectionIdleLifetime, const Duration(seconds: 7));
     expect(builder.connectionLifetime, const Duration(seconds: 11));
     expect(builder.connectionPruningInterval, const Duration(seconds: 13));
+    expect(builder.decodeNetworkTypesAsString, isTrue);
+    expect(
+        DpgsqlConnectionStringBuilder('Host=localhost')
+            .decodeNetworkTypesAsString,
+        isTrue);
+    expect(
+      DpgsqlConnectionStringBuilder(
+        'Host=localhost;Decode Network Types As String=false',
+      ).decodeNetworkTypesAsString,
+      isFalse,
+    );
   });
 
   test('DpgsqlDataSource pools connections', () async {
