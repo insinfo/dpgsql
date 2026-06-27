@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:collection';
 
 import 'internal/dpgsql_connector.dart';
+import 'dpgsql_command.dart';
 import 'dpgsql_connection.dart';
 import 'dpgsql_connection_string_builder.dart';
 
@@ -79,6 +80,16 @@ class DpgsqlDataSource {
         rethrow;
       }
     }
+  }
+
+  /// Creates an unopened connection using this data source's connection string.
+  ///
+  /// Prefer [openConnection] when pooling should be applied immediately.
+  DpgsqlConnection createConnection() => DpgsqlConnection(connectionString);
+
+  /// Creates a command associated with a new unopened connection.
+  DpgsqlCommand createCommand([String commandText = '']) {
+    return DpgsqlCommand(commandText, createConnection());
   }
 
   /// Pre-creates idle connections up to [count], or `Minimum Pool Size` when
@@ -440,6 +451,16 @@ class DpgsqlDataSource {
     }
 
     await closeIdleConnections();
+  }
+
+  static DpgsqlDataSource create(String connectionString) {
+    return DpgsqlDataSource(connectionString);
+  }
+
+  static DpgsqlDataSource createFromBuilder(
+    DpgsqlConnectionStringBuilder connectionStringBuilder,
+  ) {
+    return DpgsqlDataSource(connectionStringBuilder.toString());
   }
 
   void _throwIfDisposed() {

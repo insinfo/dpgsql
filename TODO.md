@@ -12,6 +12,16 @@
 - Teste `timezone_encoding_test.dart` cobre parsing do escopo compacto e valida que `latest_all` converte `2000-01-01 00:00:00Z` para `America/Sao_Paulo` com offset historico `-02:00`.
 - Validacao local: `dart analyze`, `timeout-cli.exe 30 dart test test\timezone_encoding_test.dart` e `timeout-cli.exe 30 dart test test\real_type_decode_test.dart` passando.
 
+## Progresso 2026-06-26 (builders/factory Dpgsql)
+
+- Iniciado port da superficie ADO-like mantendo prefixo `Dpgsql*`.
+- Adicionado `DpgsqlDataSourceBuilder` com `connectionStringBuilder`, `connectionString`, `configureConnectionString()` e `build()`.
+- Adicionado `DpgsqlSlimDataSourceBuilder`, preservando o formato do Npgsql slim builder para futura separacao de plugins/servicos opcionais.
+- Adicionado `DpgsqlFactory.instance` com criadores para comando, conexao, connection string builder, data source e builders.
+- `DpgsqlDataSource` ganhou helpers `create()`, `createFromBuilder()`, `createConnection()` e `createCommand()`.
+- Novos exports publicos em `lib/dpgsql.dart`.
+- Adicionado `datasource_builder_test.dart` cobrindo builders, factory e helpers estaticos.
+
 ## Progresso 2026-06-26 (tipos uuid/bit + executeScalar)
 
 - Mantida a decisao de API publica com prefixo `Dpgsql*`, sem voltar para nomes `Npgsql*`; o port continua inspirado no Npgsql, mas preservando identidade do pacote Dart.
@@ -242,8 +252,8 @@ Referencia analisada: `referencias/npgsql/src/Npgsql` e `referencias/npgsql/test
 
 Principais areas ainda faltando portar ou aprofundar:
 
-- `NpgsqlDataSourceBuilder`, `NpgsqlSlimDataSourceBuilder` e configuracao fluente de data source.
-- `NpgsqlCommandBuilder`, `NpgsqlDataAdapter`, `NpgsqlFactory` e compatibilidade ADO.NET equivalente.
+- `DpgsqlDataSourceBuilder`, `DpgsqlSlimDataSourceBuilder` e `DpgsqlFactory` possuem base inicial; ainda falta portar hooks avancados do Npgsql para logging/tracing/password providers/type mapper.
+- `DpgsqlCommandBuilder`, `DpgsqlDataAdapter` e compatibilidade ADO.NET equivalente.
 - `NpgsqlRawCopyStream` e APIs COPY stream-based/CSV/TEXT.
 - Tipos/conversores avancados: numeric/decimal dedicado, money, hstore, inet/cidr/macaddr, ltree, record/composite, enum, domain, multirange, cube, pg_lsn/log sequence number. `uuid` e `bit`/`varbit` ja possuem handlers basicos fortes.
 - Replicacao fisica e pgoutput completo: streaming transactions, truncate/type/origin/messages prepared transaction e extensoes equivalentes.
