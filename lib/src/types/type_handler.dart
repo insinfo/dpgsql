@@ -816,6 +816,7 @@ class TypeHandlerRegistry {
     // Arrays
     register(ArrayHandler<dynamic>(Oid.int4Array, const IntegerHandler()));
     register(ArrayHandler<dynamic>(Oid.textArray, const TextHandler()));
+    register(ArrayHandler<dynamic>(Oid.nameArray, const TextHandler()));
     register(ArrayHandler<dynamic>(Oid.boolArray, const BooleanHandler()));
     register(ArrayHandler<dynamic>(Oid.float4Array, const FloatHandler()));
     register(ArrayHandler<dynamic>(Oid.float8Array, const DoubleHandler()));
@@ -824,6 +825,11 @@ class TypeHandlerRegistry {
     _oidHandlers[Oid.varchar] = const TextHandler();
     _oidHandlers[Oid.bpchar] = const TextHandler();
     _oidHandlers[Oid.unknown] = const TextHandler();
+    // System-catalog string types: `name` (OID 19) and the internal single-byte
+    // `"char"` (OID 18). Without these, values decode as raw bytes (e.g.
+    // `SELECT datname FROM pg_database` returns Uint8List instead of String).
+    _oidHandlers[Oid.name] = const TextHandler();
+    _oidHandlers[Oid.char] = const TextHandler();
     _oidHandlers[Oid.int8] = const IntegerHandler();
     _oidHandlers[Oid.int2] = const IntegerHandler();
   }
