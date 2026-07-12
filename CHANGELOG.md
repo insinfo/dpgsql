@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.0.2
+
+- Fixed decoding of the system-catalog string types `name` (OID 19) and the
+  internal single-byte `"char"` (OID 18): they were returned as raw bytes
+  (`Uint8List`) instead of `String`. For example `SELECT datname FROM pg_database`
+  now returns `String` values. Also registered a text `ArrayHandler` for
+  `name[]` (OID 1003). Application string types (`text`, `varchar`, `char(n)`)
+  were already handled correctly.
+
 ## 1.0.1
 
 - Added `Use Extended Query For Unparameterized Commands`, allowing ORM/query-builder workloads to use extended protocol and binary result decoding for repeated single-statement queries without parameters.
