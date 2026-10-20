@@ -37,6 +37,9 @@ class DpgsqlReplicationConnection {
       decodeNetworkTypesAsString: builder.decodeNetworkTypesAsString,
       decodeUuidAsString: builder.decodeUuidAsString,
       decodeJsonAsString: builder.decodeJsonAsString,
+      decodeNumericAsString: builder.decodeNumericAsString,
+      useCustomDecimal: builder.useCustomDecimal,
+      decodeExtendedTypesAsText: builder.decodeExtendedTypesAsText,
       inferStringParametersAsUnknown: builder.inferStringParametersAsUnknown,
       // Helper to indicate replication?
       // For now, let's assume we can modify DpgsqlConnector to accept extra startup params

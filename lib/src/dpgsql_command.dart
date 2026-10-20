@@ -245,14 +245,21 @@ class DpgsqlCommand {
     );
   }
 
+  /// Runs the command and returns the rows affected by all its statements.
   Future<int> executeNonQuery() async {
+    final pipelined = connection?.inPipelineMode ?? false;
     final reader = await executeReader();
     int rows = 0;
     try {
-      while (await reader.read()) {
-        // Drain rows
-      }
-      rows = reader.recordsAffected;
+      // Every statement is read: only the first one was, and close() drops
+      // errors, so a failing later statement (`insert ...; insert into
+      // missing ...`) went unnoticed and its count was not added.
+      do {
+        while (await reader.read()) {
+          // Drain rows
+        }
+        rows += reader.recordsAffected;
+      } while (!pipelined && await reader.nextResult());
     } finally {
       await reader.close();
     }

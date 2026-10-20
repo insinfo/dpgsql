@@ -111,10 +111,46 @@ void main() {
     }
   });
 
-  test('a second concurrent command fails clearly and leaves the first intact',
+  test('a command without rows does not shift the next results (maps/rows)',
       () async {
     final conn = await openRealConnectionOrSkip();
     if (conn == null) return;
+    try {
+      await conn.executeMaps('create temp table recovery_norows (a int)');
+      // Simple protocol, with a NOTICE, with parameters, and repeated (the
+      // auto-prepare and prepared fast paths).
+      final commands = <(String, List<Object?>)>[
+        ('set search_path to public', []),
+        (r"do $$ begin raise notice 'hi'; end $$", []),
+        ('drop table if exists recovery_absent', []),
+        ('insert into recovery_norows values (?)', [1]),
+      ];
+      for (var round = 0; round < 6; round++) {
+        for (final (sql, values) in commands) {
+          final parameters = values.isEmpty ? null : _params(values);
+          expect(await conn.executeMaps(sql, parameters: parameters), isEmpty);
+          expect(await conn.executeMaps('select $round as v'), [
+            {'v': round}
+          ]);
+          expect(await conn.executeRows(sql, parameters: parameters), isEmpty);
+          expect(await conn.executeRows('select $round'), [
+            [round]
+          ]);
+        }
+      }
+      expect(
+          await conn.executeScalar('select count(*) from recovery_norows'), 12);
+    } finally {
+      await conn.close();
+    }
+  });
+
+  test(
+      'queueConcurrentCalls: false: a second concurrent command fails clearly '
+      'and leaves the first intact', () async {
+    final conn = await openRealConnectionOrSkip();
+    if (conn == null) return;
+    conn.queueConcurrentCalls = false;
     try {
       final first = conn.executeMaps('select pg_sleep(0.3), 1 as a');
       await Future<void>.delayed(const Duration(milliseconds: 50));

@@ -3,11 +3,16 @@ import 'dart:collection';
 
 import 'internal/dpgsql_connector.dart';
 import 'internal/session_settings.dart';
+import 'postgres_exception.dart';
 import 'dpgsql_command.dart';
 import 'dpgsql_connection.dart';
 import 'dpgsql_connection_string_builder.dart';
 
 const _poolMaintenanceTimeout = Duration(milliseconds: 100);
+
+/// The reset of a reused connection: a connection that does not answer it in
+/// time is discarded (its pending answer would be read by the next command).
+const _resetTimeout = Duration(seconds: 5);
 
 typedef DpgsqlConnectionCallback = FutureOr<void> Function(
   DpgsqlConnection connection,
@@ -17,29 +22,40 @@ typedef DpgsqlConnectionCallback = FutureOr<void> Function(
 /// connections. Handles connection pooling when `Pooling=true`.
 class DpgsqlDataSource {
   DpgsqlDataSource(
-    this.connectionString, {
-    this.onOpen,
-  }) : _builder = DpgsqlConnectionStringBuilder(connectionString) {
-    _validatePoolSettings();
-    _startPruningTimer();
-  }
+    String connectionString, {
+    DpgsqlConnectionCallback? onOpen,
+  }) : this._(connectionString,
+            DpgsqlConnectionStringBuilder(connectionString), onOpen);
 
   /// Creates a data source from an already configured builder, avoiding the
   /// need to serialize options to a connection string.
   DpgsqlDataSource.fromConnectionStringBuilder(
     DpgsqlConnectionStringBuilder builder, {
-    this.onOpen,
-  })  : connectionString = builder.toString(),
-        _builder = builder {
+    DpgsqlConnectionCallback? onOpen,
+  }) : this._(builder.toString(), builder, onOpen);
+
+  // The pool settings are read once: each builder getter looks its keyword up
+  // through every alias (and, when it is not set, through every parameter,
+  // normalizing each name). They were read on every checkout and return,
+  // about 20 µs of CPU each time.
+  DpgsqlDataSource._(this.connectionString, this._builder, this.onOpen)
+      : pooling = _builder.pooling,
+        minPoolSize = _builder.minPoolSize,
+        maxPoolSize = _builder.maxPoolSize,
+        connectionTimeout = _builder.timeout,
+        connectionIdleLifetime = _builder.connectionIdleLifetime,
+        connectionLifetime = _builder.connectionLifetime,
+        connectionPruningInterval = _builder.connectionPruningInterval,
+        _noResetOnClose = _builder.noResetOnClose {
     _validatePoolSettings();
     _startPruningTimer();
   }
 
   void _validatePoolSettings() {
-    if (_builder.maxPoolSize <= 0) {
+    if (maxPoolSize <= 0) {
       throw ArgumentError('Maximum Pool Size must be greater than zero');
     }
-    if (_builder.minPoolSize > _builder.maxPoolSize) {
+    if (minPoolSize > maxPoolSize) {
       throw ArgumentError(
         'Minimum Pool Size cannot be greater than Maximum Pool Size',
       );
@@ -63,13 +79,15 @@ class DpgsqlDataSource {
   int _totalConnectionTimeouts = 0;
   Timer? _pruningTimer;
 
-  bool get pooling => _builder.pooling;
-  int get minPoolSize => _builder.minPoolSize;
-  int get maxPoolSize => _builder.maxPoolSize;
-  Duration get connectionTimeout => _builder.timeout;
-  Duration get connectionIdleLifetime => _builder.connectionIdleLifetime;
-  Duration get connectionLifetime => _builder.connectionLifetime;
-  Duration get connectionPruningInterval => _builder.connectionPruningInterval;
+  final bool pooling;
+  final int minPoolSize;
+  final int maxPoolSize;
+  final Duration connectionTimeout;
+  final Duration connectionIdleLifetime;
+  final Duration connectionLifetime;
+  final Duration connectionPruningInterval;
+  final bool _noResetOnClose;
+  String? _resetBatch;
 
   /// Opens a connection to the database. If the pool is exhausted, waits until
   /// another caller closes a pooled connection or [connectionTimeout] elapses.
@@ -80,7 +98,7 @@ class DpgsqlDataSource {
       return _openNonPooledConnection();
     }
 
-    if (_builder.noResetOnClose) {
+    if (_noResetOnClose) {
       final connection = _tryOpenIdleNoResetConnection();
       if (connection != null) {
         return Future<DpgsqlConnection>.value(connection);
@@ -126,17 +144,15 @@ class DpgsqlDataSource {
       final pooled = await _rentConnector();
       try {
         if (pooled.wasReused) {
-          if (_builder.noResetOnClose) {
+          if (_noResetOnClose) {
             if (!pooled.connector.isConnected) {
               await _discardBusyConnector(pooled);
               continue;
             }
-          } else {
-            if (!await _healthCheck(pooled.connector)) {
-              await _discardBusyConnector(pooled);
-              continue;
-            }
-            await _resetConnection(pooled.connector);
+          } else if (!await _resetConnection(pooled.connector)) {
+            // The reset is also the health check.
+            await _discardBusyConnector(pooled);
+            continue;
           }
           _totalConnectionsReused++;
         }
@@ -268,7 +284,7 @@ class DpgsqlDataSource {
 
     _busyCount--;
     _idleConnectors.add(pooled);
-    if (!_builder.noResetOnClose) {
+    if (!_noResetOnClose) {
       _pruneIdleConnectors();
     }
   }
@@ -409,8 +425,48 @@ class DpgsqlDataSource {
     }
   }
 
-  /// Reset connection state before handing it to the next caller.
-  Future<void> _resetConnection(DpgsqlConnector connector) async {
+  /// Reset connection state before handing it to the next caller, in one
+  /// round trip: ROLLBACK, the reset and the session settings go in one
+  /// simple-protocol query. It used to take up to seven (a health check,
+  /// ROLLBACK, RESET ALL, CLOSE ALL, UNLISTEN *, each session SET, another
+  /// health check), about 70 µs on every checkout on a local server. False
+  /// when the connection does not answer: the pool discards it.
+  Future<bool> _resetConnection(DpgsqlConnector connector) async {
+    // DISCARD ALL cannot run in the implicit transaction block of a
+    // multi-statement query (and it would drop the prepared statements the
+    // driver keeps); the batch uses RESET ALL / CLOSE ALL / UNLISTEN *.
+    // The same for every connector of this data source: built once.
+    final batch = _resetBatch ??= [
+      'ROLLBACK',
+      'RESET ALL',
+      'CLOSE ALL',
+      'UNLISTEN *',
+      ...configuredSessionStatements(_builder,
+          connector: connector, restoreStartupParameters: true),
+    ].join('; ');
+    try {
+      final reader = await connector
+          .executeReader(batch, simpleQuery: true)
+          .timeout(_resetTimeout);
+      await reader.close();
+      return true;
+    } on PostgresException {
+      // A session setting the server rejected: the statements one by one,
+      // ignoring errors, as before.
+      try {
+        await _resetConnectionStepByStep(connector);
+        return true;
+      } catch (_) {
+        _totalConnectionsFailed++;
+        return false;
+      }
+    } catch (_) {
+      _totalConnectionsFailed++;
+      return false;
+    }
+  }
+
+  Future<void> _resetConnectionStepByStep(DpgsqlConnector connector) async {
     final conn = DpgsqlConnection.fromConnector(connector, (_) {});
 
     try {
@@ -477,6 +533,9 @@ class DpgsqlDataSource {
       decodeNetworkTypesAsString: _builder.decodeNetworkTypesAsString,
       decodeUuidAsString: _builder.decodeUuidAsString,
       decodeJsonAsString: _builder.decodeJsonAsString,
+      decodeNumericAsString: _builder.decodeNumericAsString,
+      useCustomDecimal: _builder.useCustomDecimal,
+      decodeExtendedTypesAsText: _builder.decodeExtendedTypesAsText,
       inferStringParametersAsUnknown: _builder.inferStringParametersAsUnknown,
       useExtendedQueryForUnparameterizedCommands:
           _builder.useExtendedQueryForUnparameterizedCommands,

@@ -253,6 +253,26 @@ class PreparedStatementManager {
     return null; // Not ready for preparation yet
   }
 
+  /// Forgets the auto-prepared [statement] (it is closed on the backend with
+  /// the next command), so that its next execution prepares it again.
+  void invalidate(PreparedStatement statement) {
+    if (statement.isExplicit || !identical(bySql[statement.sql], statement)) {
+      return;
+    }
+    bySql.remove(statement.sql);
+    if (statement.autoPreparedSlotIndex >= 0) {
+      autoPrepared[statement.autoPreparedSlotIndex] = null;
+      statement.autoPreparedSlotIndex = -1;
+    }
+    if (statement.isPrepared) {
+      numPrepared--;
+      statement.state = PreparedState.beingUnprepared;
+      _pendingUnprepare.add(statement);
+    } else {
+      statement.state = PreparedState.unprepared;
+    }
+  }
+
   /// Clear all prepared statements.
   void clear() {
     bySql.clear();

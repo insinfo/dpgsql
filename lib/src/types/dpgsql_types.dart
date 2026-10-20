@@ -46,15 +46,18 @@ class DpgsqlInterval {
       // Scan for Time HH:mm:ss
 
       // Regex for time: (\d+):(\d+):(\d+)(\.(\d+))?
-      final timeRegex = RegExp(r'(-?\d+):(\d+):(\d+)(\.(\d+))?');
+      // The sign is captured on its own: in `-00:00:01` the hours are -0, so
+      // the time came back positive.
+      final timeRegex = RegExp(r'(-?)(\d+):(\d+):(\d+)(\.(\d+))?');
       final timeMatch = timeRegex.firstMatch(s);
       if (timeMatch != null) {
-        final h = int.parse(timeMatch.group(1)!);
-        final m = int.parse(timeMatch.group(2)!);
-        final sec = int.parse(timeMatch.group(3)!);
+        final negative = timeMatch.group(1) == '-';
+        final h = int.parse(timeMatch.group(2)!);
+        final m = int.parse(timeMatch.group(3)!);
+        final sec = int.parse(timeMatch.group(4)!);
         double frac = 0.0;
-        if (timeMatch.group(5) != null) {
-          frac = double.parse('0.${timeMatch.group(5)}');
+        if (timeMatch.group(6) != null) {
+          frac = double.parse('0.${timeMatch.group(6)}');
         }
         // Remove time part from string to avoid confusing "3 days" with digits?
         // Actually usually patterns are separate.
@@ -63,7 +66,7 @@ class DpgsqlInterval {
             (m * 60 * 1000000) +
             (sec * 1000000) +
             (frac * 1000000).round();
-        if (h < 0) micros = -micros;
+        if (negative) micros = -micros;
         time = micros;
       }
 
@@ -253,32 +256,20 @@ class DpgsqlMoney {
 
   const DpgsqlMoney(this.value);
 
+  /// Parses the text form, which follows the server's lc_monetary:
+  /// `$1,234.56`, `-$1.50`, `($1.50)`, `R$ 1.234,56`. The separator followed
+  /// by the last two digits is the decimal one, the others group thousands
+  /// (a comma decimal separator used to be dropped: `R$ 12,34` was 1234.00).
   factory DpgsqlMoney.parse(String formattedString) {
-    // $1,234.56
-    // Remove non-numeric chars except . and -
-    String clean = formattedString.replaceAll(RegExp(r'[^\d.-]'), '');
-    double val = double.parse(clean);
-    // Money is stored as cents (or fraction).
-    // Standard is 2 decimal places? PG "money" type usually follows lc_monetary.
-    // But internally it's 64-bit int. The scale is fixed?
-    // "The scale of the money type is not fixed..." wait.
-    // Dpgsql assumes scale 2? or 4?
-    // C# output: decimal.
-    // In binary read, we treat it as int64.
-    // Usually it's 1/100 of a unit? Or 1/10000?
-    // Let's assume 2 decimal places for now as is common (cents).
-    // Actually, wait, let's check Dpgsql source or PG docs.
-    // PG docs: "The fractional precision is determined by the database's lc_monetary setting."
-    // However, binary transmission is always 64-bit integer.
-    // Is it micros?
-    // Most references say it's 100ths (cents) or dynamic.
-    // Dpgsql 2.x used to have issues. Recent Dpgsql maps to decimal.
-    // Let's assume standard assumption: * 100.
-    // Wait, let's verify with "referencias\npgsql-main" if possible?
-    // Can't search recursively easily without tool.
-    // Let's assume 100 for now.
-
-    return DpgsqlMoney((val * 100).round());
+    final text = formattedString.trim();
+    final negative = text.contains('-') || text.startsWith('(');
+    final number = text.replaceAll(RegExp(r'[^\d.,]'), '');
+    final cents = RegExp(r'[.,](\d{2})$').firstMatch(number);
+    final units = (cents == null ? number : number.substring(0, cents.start))
+        .replaceAll(RegExp(r'[.,]'), '');
+    final value = (units.isEmpty ? 0 : int.parse(units)) * 100 +
+        (cents == null ? 0 : int.parse(cents[1]!));
+    return DpgsqlMoney(negative ? -value : value);
   }
 
   @override

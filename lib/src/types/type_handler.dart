@@ -11,6 +11,7 @@ import 'range_handlers.dart';
 import 'dpgsql_types.dart';
 import 'dpgsql_geometric.dart';
 import 'custom_type_handlers.dart';
+import 'pg_binary_text.dart';
 
 /// Base class for handling PostgreSQL types.
 abstract class TypeHandler<T> {
@@ -45,10 +46,11 @@ class TextHandler extends TypeHandler<String> {
 }
 
 class IntegerHandler extends TypeHandler<int> {
-  const IntegerHandler();
+  const IntegerHandler({this.oid = Oid.int4});
 
+  /// `int2`, `int4` (the default) or `int8`: the size [write] encodes.
   @override
-  int get oid => Oid.int4;
+  final int oid;
 
   @override
   int read(Uint8List buffer, {bool isText = false, Encoding encoding = utf8}) {
@@ -65,9 +67,147 @@ class IntegerHandler extends TypeHandler<int> {
 
   @override
   Uint8List write(int value, {Encoding encoding = utf8}) {
+    // Values out of range used to be truncated silently (setInt32 keeps the
+    // low 32 bits: 2^31 was sent as -2^31).
+    if (oid == Oid.int8) {
+      final bd = ByteData(8);
+      bd.setInt64(0, value);
+      return bd.buffer.asUint8List();
+    }
+    if (oid == Oid.int2) {
+      if (value < -0x8000 || value > 0x7FFF) {
+        throw ArgumentError.value(value, 'value', 'Out of range for smallint');
+      }
+      final bd = ByteData(2);
+      bd.setInt16(0, value);
+      return bd.buffer.asUint8List();
+    }
+    if (!isInt32(value)) {
+      throw ArgumentError.value(value, 'value',
+          'Out of range for integer (int4); use DpgsqlDbType.bigint');
+    }
     final bd = ByteData(4);
     bd.setInt32(0, value);
     return bd.buffer.asUint8List();
+  }
+
+  static bool isInt32(int value) => value >= -0x80000000 && value <= 0x7FFFFFFF;
+}
+
+/// `oid`: an unsigned 32-bit integer (it came back as raw bytes in binary).
+class OidHandler extends TypeHandler<int> {
+  const OidHandler();
+
+  @override
+  int get oid => Oid.oid;
+
+  @override
+  int read(Uint8List buffer, {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) return int.parse(encoding.decode(buffer));
+    return ByteData.sublistView(buffer).getUint32(0);
+  }
+
+  @override
+  Uint8List write(int value, {Encoding encoding = utf8}) {
+    final bd = ByteData(4);
+    bd.setUint32(0, value);
+    return bd.buffer.asUint8List();
+  }
+}
+
+/// `time` and `timetz` as PostgreSQL prints them (`12:34:56.789`,
+/// `12:34:56+05:30`), the value the text format returns. Binary values used
+/// to come back as raw bytes.
+class TimeOfDayHandler extends TypeHandler<Object> {
+  const TimeOfDayHandler({this.withTimeZone = false});
+
+  final bool withTimeZone;
+
+  @override
+  int get oid => withTimeZone ? Oid.timetz : Oid.time;
+
+  @override
+  String read(Uint8List buffer,
+      {bool isText = false, Encoding encoding = utf8}) {
+    if (isText) return encoding.decode(buffer);
+    final bd = ByteData.sublistView(buffer);
+    final text = _formatTime(bd.getInt64(0));
+    if (!withTimeZone) return text;
+    // The zone is stored in seconds west of UTC.
+    return '$text${_formatOffset(-bd.getInt32(8))}';
+  }
+
+  /// Accepts `HH:MM[:SS[.ffffff]]` text (with an offset for `timetz`),
+  /// [DpgsqlTime] and [Duration] (time of day).
+  @override
+  Uint8List write(Object value, {Encoding encoding = utf8}) {
+    var micros = 0;
+    var offsetSeconds = 0;
+    if (value is DpgsqlTime) {
+      micros = value.microseconds;
+    } else if (value is Duration) {
+      micros = value.inMicroseconds;
+    } else {
+      final match = _timePattern.firstMatch(value.toString().trim());
+      if (match == null) {
+        throw ArgumentError.value(value, 'value', 'Invalid time');
+      }
+      final fraction = (match.group(4) ?? '').padRight(6, '0');
+      micros = ((int.parse(match.group(1)!) * 60 +
+                      int.parse(match.group(2)!)) *
+                  60 +
+              int.parse(match.group(3) ?? '0')) *
+          1000000 +
+          int.parse(fraction.substring(0, 6));
+      if (match.group(5) != null) {
+        offsetSeconds = (int.parse(match.group(6)!) * 60 +
+                    int.parse(match.group(7) ?? '0')) *
+                60 +
+            int.parse(match.group(8) ?? '0');
+        if (match.group(5) == '-') offsetSeconds = -offsetSeconds;
+      }
+    }
+    final bd = ByteData(withTimeZone ? 12 : 8);
+    bd.setInt64(0, micros);
+    if (withTimeZone) bd.setInt32(8, -offsetSeconds);
+    return bd.buffer.asUint8List();
+  }
+
+  static final _timePattern = RegExp(
+      r'^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?'
+      r'(?:([+-])(\d{1,2})(?::?(\d{2}))?(?::(\d{2}))?)?$');
+
+  static String _two(int value) => value.toString().padLeft(2, '0');
+
+  static String _formatTime(int micros) {
+    final seconds = micros ~/ 1000000;
+    final fraction = micros % 1000000;
+    final buffer = StringBuffer()
+      ..write(_two(seconds ~/ 3600))
+      ..write(':')
+      ..write(_two(seconds ~/ 60 % 60))
+      ..write(':')
+      ..write(_two(seconds % 60));
+    if (fraction != 0) {
+      buffer
+        ..write('.')
+        ..write(fraction
+            .toString()
+            .padLeft(6, '0')
+            .replaceFirst(RegExp(r'0+$'), ''));
+    }
+    return buffer.toString();
+  }
+
+  static String _formatOffset(int offsetSeconds) {
+    final sign = offsetSeconds < 0 ? '-' : '+';
+    final total = offsetSeconds.abs();
+    final buffer = StringBuffer(sign)..write(_two(total ~/ 3600));
+    final minutes = total ~/ 60 % 60;
+    final seconds = total % 60;
+    if (minutes != 0 || seconds != 0) buffer.write(':${_two(minutes)}');
+    if (seconds != 0) buffer.write(':${_two(seconds)}');
+    return buffer.toString();
   }
 }
 
@@ -98,11 +238,17 @@ class FloatHandler extends TypeHandler<double> {
   @override
   int get oid => Oid.float4;
 
+  /// The float4 value of [text] (`'1.1'`), widened to double: the value the
+  /// binary format gives (1.100000023841858). `double.parse` alone gave 1.1,
+  /// so a value read in text differed from the same value read in binary.
+  static double parseText(String text) =>
+      (Float32List(1)..[0] = double.parse(text))[0];
+
   @override
   double read(Uint8List buffer,
       {bool isText = false, Encoding encoding = utf8}) {
     if (isText) {
-      return double.parse(encoding.decode(buffer));
+      return parseText(encoding.decode(buffer));
     }
     final bd = ByteData.sublistView(buffer);
     if (buffer.length == 4) return bd.getFloat32(0);
@@ -571,7 +717,8 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
 
     // Reconstruct dimensions if ndim > 1
     if (ndim == 1) {
-      return elements.cast<E>();
+      final typed = typedElements(elements);
+      return typed is List<E> ? typed : elements.cast<E>();
     } else {
       return _reconstructArray(elements, dims).cast<E>();
     }
@@ -581,7 +728,27 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
     if (text == '{}') return <E>[];
     final result = <dynamic>[];
     _parseArrayRecursive(text, 0, result, encoding);
+    if (result.every((e) => e is! List)) {
+      final typed = typedElements(result);
+      if (typed is List<E>) return typed;
+    }
     return result.cast<E>();
+  }
+
+  /// [elements] as a list of their type (`List<int?>`, `List<String?>`...),
+  /// so `as List<int?>` works. `cast<dynamic>()` gave a
+  /// `CastList<dynamic, dynamic>`.
+  static List<Object?> typedElements(List<dynamic> elements) {
+    final values = elements.where((e) => e != null);
+    if (values.isEmpty) return List<Object?>.of(elements);
+    if (values.every((e) => e is String)) return List<String?>.of(elements.cast());
+    if (values.every((e) => e is int)) return List<int?>.of(elements.cast());
+    if (values.every((e) => e is double)) return List<double?>.of(elements.cast());
+    if (values.every((e) => e is bool)) return List<bool?>.of(elements.cast());
+    if (values.every((e) => e is DateTime)) {
+      return List<DateTime?>.of(elements.cast());
+    }
+    return List<Object?>.of(elements);
   }
 
   int _parseArrayRecursive(
@@ -708,14 +875,15 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
 
   void _calculateDims(List list, List<int> dims) {
     dims.add(list.length);
-    if (list.isNotEmpty && list.first is List) {
+    // A Uint8List element is a bytea value, not a dimension.
+    if (list.isNotEmpty && list.first is List && list.first is! Uint8List) {
       _calculateDims(list.first as List, dims);
     }
   }
 
   void _writeRecursive(List list, List<int> out, Encoding encoding) {
     for (final item in list) {
-      if (item is List) {
+      if (item is List && item is! Uint8List) {
         _writeRecursive(item, out, encoding);
       } else {
         if (item == null) {
@@ -745,6 +913,8 @@ class TypeHandlerRegistry {
     bool decodeNetworkTypesAsString = true,
     bool decodeUuidAsString = true,
     bool decodeJsonAsString = false,
+    bool decodeNumericAsString = false,
+    bool decodeExtendedTypesAsText = false,
     TimeZoneSettings timeZone = const TimeZoneSettings.utc(),
   }) {
     register(const TextHandler());
@@ -784,10 +954,16 @@ class TypeHandlerRegistry {
       register(TimestampHandler(timeZone: timeZone, timestampTz: true));
     }
 
+    if (!useDpgsqlTypes) {
+      register(const TimeOfDayHandler());
+    }
+    register(const TimeOfDayHandler(withTimeZone: true));
     register(const DpgsqlIntervalHandler());
     register(const DpgsqlMoneyHandler());
     if (useDpgsqlTypes || useCustomDecimal) {
       register(_dpgsqlDecimalHandler);
+    } else if (decodeNumericAsString) {
+      register(const NumericStringHandler());
     } else {
       register(const NumericDoubleHandler());
     }
@@ -820,6 +996,37 @@ class TypeHandlerRegistry {
     register(ArrayHandler<dynamic>(Oid.boolArray, const BooleanHandler()));
     register(ArrayHandler<dynamic>(Oid.float4Array, const FloatHandler()));
     register(ArrayHandler<dynamic>(Oid.float8Array, const DoubleHandler()));
+    // These element types came back as raw bytes (binary) or as the array
+    // literal text (`{1,2}`).
+    register(ArrayHandler<dynamic>(
+        Oid.int2Array, const IntegerHandler(oid: Oid.int2)));
+    register(ArrayHandler<dynamic>(
+        Oid.int8Array, const IntegerHandler(oid: Oid.int8)));
+    register(ArrayHandler<dynamic>(Oid.oidArray, const OidHandler()));
+    register(ArrayHandler<dynamic>(Oid.varcharArray, const TextHandler()));
+    register(ArrayHandler<dynamic>(Oid.bpcharArray, const TextHandler()));
+    register(ArrayHandler<dynamic>(Oid.charArray, const TextHandler()));
+    register(ArrayHandler<dynamic>(Oid.byteaArray, const ByteaHandler()));
+    for (final elementOid in [
+      Oid.numeric,
+      Oid.date,
+      Oid.time,
+      Oid.timetz,
+      Oid.timestamp,
+      Oid.timestamptz,
+      Oid.interval,
+      Oid.uuid,
+      Oid.json,
+      Oid.jsonb,
+      Oid.inet,
+      Oid.cidr,
+    ]) {
+      final elementHandler = _oidHandlers[elementOid];
+      final arrayOid = Oid.arrayOf(elementOid);
+      if (elementHandler != null && arrayOid != null) {
+        register(ArrayHandler<dynamic>(arrayOid, elementHandler));
+      }
+    }
 
     // Mappings for aliases
     _oidHandlers[Oid.varchar] = const TextHandler();
@@ -830,9 +1037,51 @@ class TypeHandlerRegistry {
     // `SELECT datname FROM pg_database` returns Uint8List instead of String).
     _oidHandlers[Oid.name] = const TextHandler();
     _oidHandlers[Oid.char] = const TextHandler();
-    _oidHandlers[Oid.int8] = const IntegerHandler();
-    _oidHandlers[Oid.int2] = const IntegerHandler();
+    _oidHandlers[Oid.int8] = const IntegerHandler(oid: Oid.int8);
+    _oidHandlers[Oid.int2] = const IntegerHandler(oid: Oid.int2);
+    _oidHandlers[Oid.oid] = const OidHandler();
+    _oidHandlers[Oid.xml] = const TextHandler();
+
+    if (decodeExtendedTypesAsText) {
+      for (final oid in _extendedTypes) {
+        _oidHandlers[oid] = ServerTextHandler(oid, _oidHandlers[oid]);
+      }
+      PgBinaryText.arrayElements.forEach((arrayOid, elementOid) {
+        final element = _oidHandlers[elementOid];
+        if (element != null) {
+          register(ArrayHandler<dynamic>(arrayOid, element));
+        }
+      });
+    }
   }
+
+  /// Types without a natural Dart type (see `Decode Extended Types As Text`).
+  static const _extendedTypes = [
+    PgBinaryText.oidTime,
+    PgBinaryText.oidTimetz,
+    PgBinaryText.oidInterval,
+    PgBinaryText.oidInet,
+    PgBinaryText.oidCidr,
+    PgBinaryText.oidMacaddr,
+    PgBinaryText.oidMacaddr8,
+    PgBinaryText.oidMoney,
+    PgBinaryText.oidPoint,
+    PgBinaryText.oidLseg,
+    PgBinaryText.oidPath,
+    PgBinaryText.oidBox,
+    PgBinaryText.oidPolygon,
+    PgBinaryText.oidLine,
+    PgBinaryText.oidCircle,
+    PgBinaryText.oidBit,
+    PgBinaryText.oidVarbit,
+    PgBinaryText.oidTsvector,
+    PgBinaryText.oidInt4range,
+    PgBinaryText.oidInt8range,
+    PgBinaryText.oidNumrange,
+    PgBinaryText.oidDaterange,
+    PgBinaryText.oidTsrange,
+    PgBinaryText.oidTstzrange,
+  ];
 
   void register(TypeHandler handler) {
     _oidHandlers[handler.oid] = handler;
@@ -843,13 +1092,19 @@ class TypeHandlerRegistry {
   }
 
   TypeHandler? resolveByValue(dynamic value) {
-    if (value is int) return _oidHandlers[Oid.int4];
+    // int4 when the value fits (the type sent so far), int8 otherwise: values
+    // out of the int4 range used to be truncated silently.
+    if (value is int) {
+      return _oidHandlers[IntegerHandler.isInt32(value) ? Oid.int4 : Oid.int8];
+    }
     if (value is bool) return _oidHandlers[Oid.bool];
     if (value is String) return _oidHandlers[Oid.text];
     if (value is double) return _oidHandlers[Oid.float8];
     if (value is DateTime) return _oidHandlers[Oid.timestamp];
     if (value is Uint8List) return _oidHandlers[Oid.bytea];
     if (value is DpgsqlUuid) return _oidHandlers[Oid.uuid];
+    // Exact numeric parameter, whatever handler decodes numeric results.
+    if (value is DpgsqlDecimal) return _dpgsqlDecimalHandler;
     if (value is DpgsqlBitString) return _oidHandlers[Oid.varbit];
     if (value is DpgsqlCidr) return _oidHandlers[Oid.cidr];
     if (value is DpgsqlInet) return _oidHandlers[Oid.inet];
@@ -880,17 +1135,33 @@ class TypeHandlerRegistry {
         return _oidHandlers[Oid.textArray];
       }
       var first = value.first;
-      while (first is List && first.isNotEmpty) {
+      // A list of Uint8List is bytea[]; it was read as nested int arrays.
+      while (first is List && first is! Uint8List && first.isNotEmpty) {
         first = first.first;
       }
 
-      if (first is int) return _oidHandlers[Oid.int4Array];
+      if (first is Uint8List) return _oidHandlers[Oid.byteaArray];
+      if (first is int) {
+        return _oidHandlers[
+            _allInt32(value) ? Oid.int4Array : Oid.int8Array];
+      }
       if (first is String) return _oidHandlers[Oid.textArray];
       if (first is bool) return _oidHandlers[Oid.boolArray];
       if (first is double) return _oidHandlers[Oid.float8Array];
     }
 
     return null;
+  }
+
+  static bool _allInt32(List items) {
+    for (final item in items) {
+      if (item is List) {
+        if (!_allInt32(item)) return false;
+      } else if (item is int && !IntegerHandler.isInt32(item)) {
+        return false;
+      }
+    }
+    return true;
   }
 
   TypeHandler<T>? resolveByDartType<T>() {
@@ -994,7 +1265,10 @@ class TypeHandlerRegistry {
       case DpgsqlDbType.money:
         return _oidHandlers[Oid.money];
       case DpgsqlDbType.numeric:
-        return _oidHandlers[Oid.numeric];
+        // A String, num or DpgsqlDecimal parameter, exactly, whatever
+        // handler decodes numeric results (the double and DpgsqlDecimal
+        // handlers accept only their own type).
+        return const NumericStringHandler();
       case DpgsqlDbType.path:
         return _oidHandlers[Oid.path];
       case DpgsqlDbType.point:

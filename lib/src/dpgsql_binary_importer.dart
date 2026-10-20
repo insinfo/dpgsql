@@ -90,11 +90,20 @@ class DpgsqlBinaryImporter {
     trailer.setInt16(0, -1);
     await _connector.writeCopyData(trailer.buffer.asUint8List());
 
-    // CopyDone
-    await _connector.writeCopyDone();
+    try {
+      // CopyDone
+      await _connector.writeCopyDone();
 
-    // Await CommandComplete
-    await _connector.awaitCopyComplete();
+      // Await CommandComplete
+      await _connector.awaitCopyComplete();
+    } catch (error) {
+      // A rejected row: the error is raised after ReadyForQuery, the
+      // connection is usable. It used to keep the connection's turn, so every
+      // later command waited forever.
+      _isDisposed = true;
+      _notifyClosed(reusable: error is PostgresException);
+      rethrow;
+    }
 
     _isDisposed = true;
     _notifyClosed(reusable: true);
@@ -106,6 +115,7 @@ class DpgsqlBinaryImporter {
 
     try {
       await _connector.writeCopyFail("Cancelled by user");
+      await _connector.awaitCopyFailAnswer();
     } catch (e) {
       // Ignore
     }

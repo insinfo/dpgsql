@@ -85,4 +85,28 @@ abstract class Oid {
   static const int timestampArray = 1115;
   static const int timestamptzArray = 1185;
   static const int numericArray = 1231;
+  static const int int8Array = 1016;
+  static const int timetzArray = 1270;
+  static const int intervalArray = 1187;
+  static const int uuidArray = 2951;
+  static const int jsonArray = 199;
+  static const int jsonbArray = 3807;
+  static const int cidrArray = 651;
+
+  /// The array type of [elementOid], for the element types with an array
+  /// handler; `null` otherwise.
+  static int? arrayOf(int elementOid) => const {
+        numeric: numericArray,
+        date: dateArray,
+        time: timeArray,
+        timetz: timetzArray,
+        timestamp: timestampArray,
+        timestamptz: timestamptzArray,
+        interval: intervalArray,
+        uuid: uuidArray,
+        json: jsonArray,
+        jsonb: jsonbArray,
+        inet: inetArray,
+        cidr: cidrArray,
+      }[elementOid];
 }

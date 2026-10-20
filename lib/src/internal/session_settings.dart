@@ -12,6 +12,25 @@ Future<void> applyConfiguredSessionSettings(
   Duration timeout = defaultSessionSettingsTimeout,
   bool ignoreErrors = false,
 }) async {
+  final statements = configuredSessionStatements(builder,
+      connector: connector, restoreStartupParameters: restoreStartupParameters);
+  for (final sql in statements) {
+    try {
+      await connection.createCommand(sql).executeNonQuery().timeout(timeout);
+    } catch (_) {
+      if (!ignoreErrors) {
+        rethrow;
+      }
+    }
+  }
+}
+
+/// The `SET` statements of the session settings in [builder].
+List<String> configuredSessionStatements(
+  DpgsqlConnectionStringBuilder builder, {
+  DpgsqlConnector? connector,
+  bool restoreStartupParameters = false,
+}) {
   final statements = <String>[];
 
   if (restoreStartupParameters && connector != null) {
@@ -55,15 +74,7 @@ Future<void> applyConfiguredSessionSettings(
     );
   }
 
-  for (final sql in statements) {
-    try {
-      await connection.createCommand(sql).executeNonQuery().timeout(timeout);
-    } catch (_) {
-      if (!ignoreErrors) {
-        rethrow;
-      }
-    }
-  }
+  return statements;
 }
 
 String quoteSqlLiteral(String value) => "'${value.replaceAll("'", "''")}'";

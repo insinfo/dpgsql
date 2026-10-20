@@ -29,6 +29,7 @@ class SqlRewriter {
 
     int index = 0;
     int positionalIndex = 0; // For ? placeholders
+    var sawNumberedPlaceholder = false; // $1, $2, ... written by hand
     final len = sql.length;
 
     /// Copies [sql] from [index] up to [end] (exclusive) and moves there.
@@ -69,8 +70,13 @@ class SqlRewriter {
           }
           final name = sql.substring(start, index);
 
-          // Find parameter
-          final param = parameters.firstWhere((p) => p.parameterName == name,
+          // Find parameter. As in Npgsql, its name may carry the `@` or `:`
+          // prefix (`addWithValue('@id', 1)`): it was not found.
+          final param = parameters.firstWhere(
+              (p) =>
+                  p.parameterName == name ||
+                  p.parameterName == '@$name' ||
+                  p.parameterName == ':$name',
               orElse: () =>
                   throw Exception('Parameter @$name not found in collection'));
 
@@ -110,9 +116,22 @@ class SqlRewriter {
         sb.write('\$$paramIdx');
         index++;
       } else {
+        if (char == r'$' &&
+            next.isNotEmpty &&
+            next.codeUnitAt(0) >= 48 &&
+            next.codeUnitAt(0) <= 57 &&
+            (index == 0 || !_isIdentifierPart(sql[index - 1]))) {
+          sawNumberedPlaceholder = true;
+        }
         sb.write(char);
         index++;
       }
+    }
+
+    // Only `$1, $2, ...`: the parameters bind in collection order. They used
+    // to be dropped, so the statement failed (08P01, 42P02).
+    if (orderedParams.isEmpty && sawNumberedPlaceholder) {
+      return RewrittenSql(sql, parameters.toList());
     }
 
     return RewrittenSql(sb.toString(), orderedParams);

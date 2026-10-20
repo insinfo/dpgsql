@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import '../internal/timezone_helper.dart';
 import '../timezone_settings.dart';
+import '../types/custom_type_handlers.dart';
 import '../types/oid.dart';
 
 /// Efficient row representation with zero-copy buffer views.
@@ -130,49 +131,10 @@ class PgRow {
   /// Get a PostgreSQL numeric column as double (binary format).
   double? getNumericDouble(int index) {
     RangeError.checkValidIndex(index, this, 'index', columnCount);
-    var offset = columnOffsets[index];
     final length = columnLengths[index];
     if (length == -1) return null;
-    final end = offset + length;
-    if (offset + 8 > end) {
-      throw FormatException('Invalid numeric length: $length');
-    }
-
-    final ndigits = _readInt16(offset);
-    offset += 2;
-    final weight = _readInt16(offset);
-    offset += 2;
-    final sign = _readInt16(offset);
-    offset += 2;
-    offset += 2;
-
-    if (sign == 0xC000) {
-      return double.nan;
-    }
-    if (ndigits == 0) {
-      return sign == 0x4000 ? -0.0 : 0.0;
-    }
-
-    var value = 0.0;
-    for (var i = 0; i < ndigits; i++) {
-      if (offset + 2 > end) {
-        throw FormatException('Invalid numeric digit length: $length');
-      }
-      value = (value * 10000) + _readInt16(offset);
-      offset += 2;
-    }
-
-    var scaleGroups = ndigits - weight - 1;
-    while (scaleGroups > 0) {
-      value /= 10000;
-      scaleGroups--;
-    }
-    while (scaleGroups < 0) {
-      value *= 10000;
-      scaleGroups++;
-    }
-
-    return sign == 0x4000 ? -value : value;
+    return NumericDoubleHandler.decodeBinary(
+        buffer, columnOffsets[index], length);
   }
 
   /// Get a PostgreSQL timestamp/timestamptz column as DateTime (binary format).
@@ -194,11 +156,6 @@ class PgRow {
     final bytes = this[index];
     if (bytes == null) return null;
     return bytes.isNotEmpty && bytes[0] != 0;
-  }
-
-  int _readInt16(int offset) {
-    final value = (buffer[offset] << 8) | buffer[offset + 1];
-    return value.toSigned(16);
   }
 
   int _readUint32(int offset) {

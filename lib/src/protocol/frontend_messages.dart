@@ -103,13 +103,9 @@ class FrontendMessages {
       throw ArgumentError(
           'parameterFormatCodes deve ter 0, 1 ou o mesmo tamanho de parameterValues');
     }
-    if (resultFormatCodes.isNotEmpty &&
-        resultFormatCodes.length != 1 &&
-        resultFormatCodes.length != parameterValues.length) {
-      // No protocolo é relacionado ao número de colunas retornadas; aqui exigimos consistência simples.
-      throw ArgumentError(
-          'resultFormatCodes deve ter 0, 1 ou o mesmo tamanho de parameterValues');
-    }
+    // resultFormatCodes: 0, 1 or one per result column, which only the
+    // server knows here (it rejects a wrong count). It was compared with the
+    // number of parameters, which rejected per-column formats.
 
     return _writer.writeMessage(_charCode('B'), (body) {
       body.writeBytes(_encodeCString(portalName));

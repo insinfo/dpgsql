@@ -15,6 +15,7 @@ import '../dpgsql_parameter_collection.dart';
 import '../pg_result_mode.dart';
 import '../data/pg_row.dart';
 import '../types/oid.dart';
+import '../types/custom_type_handlers.dart';
 import '../types/type_handler.dart';
 import '../dpgsql_batch.dart';
 import '../dpgsql_batch_command.dart';
@@ -52,6 +53,9 @@ class DpgsqlConnector {
     bool decodeNetworkTypesAsString = true,
     bool decodeUuidAsString = true,
     bool decodeJsonAsString = false,
+    bool decodeNumericAsString = false,
+    bool useCustomDecimal = false,
+    bool decodeExtendedTypesAsText = false,
     this.inferStringParametersAsUnknown = true,
     this.useExtendedQueryForUnparameterizedCommands = false,
   })  : timeZone = timeZone ?? const TimeZoneSettings.utc(),
@@ -64,6 +68,9 @@ class DpgsqlConnector {
           decodeNetworkTypesAsString: decodeNetworkTypesAsString,
           decodeUuidAsString: decodeUuidAsString,
           decodeJsonAsString: decodeJsonAsString,
+          decodeNumericAsString: decodeNumericAsString,
+          useCustomDecimal: useCustomDecimal,
+          decodeExtendedTypesAsText: decodeExtendedTypesAsText,
         );
 
   final String host;
@@ -90,6 +97,12 @@ class DpgsqlConnector {
 
   final TypeHandlerRegistry _typeRegistry;
   final Map<String, RowDescriptionMessage> _preparedRowDescriptions = {};
+
+  /// Result columns of the statements auto-prepared in the same round trip as
+  /// their first execution, used only to choose the result formats of the
+  /// next executions ([_resultFormatCodes]). Without it every later
+  /// execution of a parameterized query asked for text results.
+  final Map<String, RowDescriptionMessage> _autoPreparedColumns = {};
   final Map<String, _PreparedMapMetadata> _preparedMapMetadata = {};
   final Queue<IBackendMessage> _bufferedBackendMessages =
       Queue<IBackendMessage>();
@@ -381,8 +394,9 @@ class DpgsqlConnector {
   Future<void> cancelRequest() async {
     if (_backendProcessId == 0 || _backendSecretKey == 0) return;
 
+    Socket? socket;
     try {
-      final socket = await Socket.connect(host, port);
+      socket = await Socket.connect(host, port);
       final buffer = SocketBinaryOutput(socket);
       final writer = PostgresMessageWriter(buffer);
       final frontend = FrontendMessages(writer);
@@ -390,8 +404,21 @@ class DpgsqlConnector {
       await frontend.writeCancelRequest(_backendProcessId, _backendSecretKey);
       await socket.flush();
       await socket.close();
+      // The server closes the connection once it has read the request. The
+      // read side was never consumed, so the socket stayed open, and kept the
+      // process from exiting, after cancel(). Not awaited: cancel() returns
+      // once the request is sent, before the cancelled command fails.
+      final sent = socket;
+      socket = null;
+      unawaited(sent
+          .drain<void>()
+          .timeout(const Duration(seconds: 5), onTimeout: () {})
+          .catchError((_) {})
+          .whenComplete(sent.destroy));
     } catch (e) {
       // Ignore errors during cancel
+    } finally {
+      socket?.destroy();
     }
   }
 
@@ -644,6 +671,20 @@ class DpgsqlConnector {
     throw exception;
   }
 
+  /// Rethrows [error] (a value that failed to decode, or a row callback
+  /// that threw) after consuming the rest of the response, like
+  /// [_throwAfterReadyForQuery]: leaving it unread made every later command
+  /// return the previous command's result.
+  Future<Never> _drainAndRethrow(Object error, StackTrace stackTrace) async {
+    if (!inPipelineMode) {
+      while (true) {
+        final next = await _readMessage();
+        if (next is ReadyForQueryMessage) break;
+      }
+    }
+    Error.throwWithStackTrace(error, stackTrace);
+  }
+
   Future<IBackendMessage> _readMessage() {
     // Legacy internal call, redirect to central handler to ensure we don't miss notifications
     return readMessage();
@@ -838,12 +879,43 @@ class DpgsqlConnector {
     }
   }
 
+  /// Result format codes for a statement whose columns are [description]:
+  /// binary for the columns with a binary decoder, text for the others
+  /// (enums, tsvector, reg*, user-defined types). Their binary form is not
+  /// decoded: an enum came back as bytes, indistinguishable from bytea. Text
+  /// for every column when the columns are not known yet (the statement is
+  /// parsed in the same round trip), as the simple protocol does.
+  List<int> _resultFormatCodes(
+      RowDescriptionMessage? description, PgResultMode resultMode) {
+    if (resultMode == PgResultMode.rawText || description == null) {
+      return const [0];
+    }
+    final codes = [
+      for (final field in description.fields)
+        _typeRegistry.resolve(field.oid) != null ? 1 : 0,
+    ];
+    if (codes.every((code) => code == 1)) return const [1];
+    if (codes.every((code) => code == 0)) return const [0];
+    return codes;
+  }
+
+  /// Every column of [description] has a binary decoder: the prepared fast
+  /// paths, which request binary results, can read it.
+  bool _binaryDecodable(RowDescriptionMessage description) => description
+      .fields
+      .every((field) => _typeRegistry.resolve(field.oid) != null);
+
+  /// [extendedQuery]: use the extended protocol even without parameters.
+  /// [binaryResults]: every column in binary (PgRow reads binary values);
+  /// otherwise see [_resultFormatCodes].
   Future<DpgsqlDataReader> executeReader(String sql,
       {DpgsqlParameterCollection? parameters,
       String? statementName,
       bool rewriteParameters = true,
-      PgResultMode resultMode = PgResultMode.typed}) async {
-    final resultFormatCode = resultMode == PgResultMode.rawText ? 0 : 1;
+      PgResultMode resultMode = PgResultMode.typed,
+      bool extendedQuery = false,
+      bool binaryResults = false,
+      bool simpleQuery = false}) async {
     if (parameters != null && parameters.isNotEmpty) {
       // Extended Query Protocol
 
@@ -868,8 +940,20 @@ class DpgsqlConnector {
         paramOids.add(_parameterOid(handler));
       }
 
+      // Encoded before anything is written: a value that failed to encode
+      // (a Map holding a non-JSON value, an out-of-range int) used to leave
+      // Parse in the write buffer, sent ahead of the next command; when that
+      // Parse failed, the server skipped the next command up to its Sync and
+      // the connection hung.
+      final values = <Uint8List?>[];
+      final formatCodes = <int>[];
+      for (var i = 0; i < paramsToUse.length; i++) {
+        _encodeParameter(paramsToUse[i], paramHandlers[i], values, formatCodes);
+      }
+
       var statementNameToUse = statementName;
       PreparedStatement? autoPrepareStatement;
+      PreparedStatement? autoPrepared;
 
       if (statementName == null) {
         if (preparedStatementManager.maxAutoPrepared > 0) {
@@ -879,6 +963,7 @@ class DpgsqlConnector {
           );
           if (prepared != null) {
             statementNameToUse = prepared.name;
+            autoPrepared = prepared;
           } else {
             final candidate = preparedStatementManager
                 .tryGetOrCreateAutoPrepareCandidate(sqlToExecute, paramOids);
@@ -916,20 +1001,21 @@ class DpgsqlConnector {
         // DpgsqlCommand handles the ordering before calling executeReader.
       }
 
-      // 2. Bind
-      final values = <Uint8List?>[];
-      final formatCodes = <int>[];
-
-      for (var i = 0; i < paramsToUse.length; i++) {
-        _encodeParameter(paramsToUse[i], paramHandlers[i], values, formatCodes);
-      }
-
+      // 2. Bind. The columns are known for a statement prepared earlier, not
+      // for one parsed in this round trip.
+      final description = autoPrepareStatement == null &&
+              statementNameToUse != null
+          ? _preparedRowDescriptions[statementNameToUse] ??
+              _autoPreparedColumns[statementNameToUse]
+          : null;
       await _frontendMessages!.writeBind(
         portalName: '',
         statementName: statementNameToUse ?? '',
         parameterValues: values,
         parameterFormatCodes: formatCodes,
-        resultFormatCodes: [resultFormatCode],
+        resultFormatCodes: binaryResults
+            ? const [1]
+            : _resultFormatCodes(description, resultMode),
         flush: false,
       );
 
@@ -947,11 +1033,17 @@ class DpgsqlConnector {
         await reader.init();
         if (autoPrepareStatement != null) {
           preparedStatementManager.completeAutoPrepare(autoPrepareStatement);
+          final name = autoPrepareStatement.name;
+          final columns = reader.rowDescriptionMessage;
+          if (name != null && columns != null) {
+            _autoPreparedColumns[name] = columns;
+          }
         }
-      } catch (_) {
+      } catch (error) {
         if (autoPrepareStatement != null) {
           autoPrepareStatement.abortPrepare();
         }
+        _invalidateAutoPrepared(autoPrepared, error);
         rethrow;
       }
       return reader;
@@ -960,7 +1052,11 @@ class DpgsqlConnector {
       // preserving PostgreSQL multi-statement semantics. Some ORM workloads
       // prefer extended protocol even without parameters to request binary
       // result columns and avoid text parsing on every row.
-      if (statementName != null || useExtendedQueryForUnparameterizedCommands) {
+      // [simpleQuery]: several statements in one round trip (the pool's
+      // reset), even with useExtendedQueryForUnparameterizedCommands.
+      if (statementName != null ||
+          extendedQuery ||
+          (useExtendedQueryForUnparameterizedCommands && !simpleQuery)) {
         // Extended Protocol without parameters
         if (statementName == null) {
           await _frontendMessages!.writeParse(
@@ -972,7 +1068,13 @@ class DpgsqlConnector {
         await _frontendMessages!.writeBind(
           portalName: '',
           statementName: statementName ?? '',
-          resultFormatCodes: [resultFormatCode],
+          resultFormatCodes: binaryResults
+              ? const [1]
+              : _resultFormatCodes(
+                  statementName == null
+                      ? null
+                      : _preparedRowDescriptions[statementName],
+                  resultMode),
           flush: false,
         );
         await _frontendMessages!.writeDescribePortal('', flush: false);
@@ -999,7 +1101,7 @@ class DpgsqlConnector {
   }) async {
     final preparedDescription =
         statementName == null ? null : _preparedRowDescriptions[statementName];
-    if (preparedDescription != null) {
+    if (preparedDescription != null && _binaryDecodable(preparedDescription)) {
       return _executePreparedRowsFast(
         statementName!,
         parameters,
@@ -1040,7 +1142,7 @@ class DpgsqlConnector {
   }) async {
     final preparedDescription =
         statementName == null ? null : _preparedRowDescriptions[statementName];
-    if (preparedDescription != null) {
+    if (preparedDescription != null && _binaryDecodable(preparedDescription)) {
       return _executePreparedScalarFast(
         statementName!,
         parameters,
@@ -1055,10 +1157,23 @@ class DpgsqlConnector {
       rewriteParameters: rewriteParameters,
     );
     try {
-      if (!await reader.read() || reader.fieldCount == 0) {
-        return null;
-      }
-      return reader.getValue(0);
+      // The first value of the first row, reading the whole response like
+      // the prepared path: close() drops errors, so an error raised after the
+      // first row (`select 1 / (g - 2) ...`) or by a later statement used to
+      // be lost, returning a value of a failed statement. As in executeMaps,
+      // statements without rows before the query (`set ...; select ...`) are
+      // skipped.
+      Object? value;
+      var found = false;
+      do {
+        while (await reader.read()) {
+          if (!found && reader.fieldCount > 0) {
+            value = reader.getValue(0);
+            found = true;
+          }
+        }
+      } while (await reader.nextResult());
+      return value;
     } finally {
       await reader.close();
     }
@@ -1073,7 +1188,9 @@ class DpgsqlConnector {
   }) async {
     final preparedDescription =
         statementName == null ? null : _preparedRowDescriptions[statementName];
-    if (preparedDescription != null) {
+    if (preparedDescription != null &&
+        (resultMode == PgResultMode.rawText ||
+            _binaryDecodable(preparedDescription))) {
       if (resultMode == PgResultMode.rawText) {
         return _executePreparedMapsRawTextFast(
           statementName!,
@@ -1142,18 +1259,33 @@ class DpgsqlConnector {
     final preparedName = prepared?.name;
     final preparedDescription =
         preparedName == null ? null : _preparedRowDescriptions[preparedName];
+    if (preparedName != null &&
+        (preparedDescription == null ||
+            (resultMode != PgResultMode.rawText &&
+                !_binaryDecodable(preparedDescription)))) {
+      // A statement without rows (NoData): it is run by name. The unnamed
+      // path made the next call prepare it again: "prepared statement _pN
+      // already exists" (42P05). Columns without a binary decoder are read
+      // in text by the reader, not by the binary fast path.
+      return _executeNamedMaps(sql, prepared!, resultMode);
+    }
     if (preparedName != null && preparedDescription != null) {
-      return resultMode == PgResultMode.rawText
-          ? _executePreparedMapsRawTextFast(
-              preparedName,
-              parameters,
-              preparedDescription,
-            )
-          : _executePreparedMapsFast(
-              preparedName,
-              parameters,
-              preparedDescription,
-            );
+      try {
+        return await (resultMode == PgResultMode.rawText
+            ? _executePreparedMapsRawTextFast(
+                preparedName,
+                parameters,
+                preparedDescription,
+              )
+            : _executePreparedMapsFast(
+                preparedName,
+                parameters,
+                preparedDescription,
+              ));
+      } catch (error) {
+        _invalidateAutoPrepared(prepared, error);
+        rethrow;
+      }
     }
 
     final candidate =
@@ -1186,8 +1318,10 @@ class DpgsqlConnector {
     }
 
     final rowDescription = _preparedRowDescriptions[autoPreparedName];
-    if (rowDescription == null) {
-      return null;
+    if (rowDescription == null ||
+        (resultMode != PgResultMode.rawText &&
+            !_binaryDecodable(rowDescription))) {
+      return _executeNamedMaps(sql, autoPrepareStatement, resultMode);
     }
 
     return resultMode == PgResultMode.rawText
@@ -1201,6 +1335,24 @@ class DpgsqlConnector {
             parameters,
             rowDescription,
           );
+  }
+
+  Future<List<Map<String, dynamic>>> _executeNamedMaps(
+    String sql,
+    PreparedStatement statement,
+    PgResultMode resultMode,
+  ) async {
+    try {
+      final reader = await executeReader(
+        sql,
+        statementName: statement.name,
+        resultMode: resultMode,
+      );
+      return await (reader as DpgsqlDataReaderImpl).readAllMaps();
+    } catch (error) {
+      _invalidateAutoPrepared(statement, error);
+      rethrow;
+    }
   }
 
   Future<List<PgRow>> executePgRows(
@@ -1219,37 +1371,19 @@ class DpgsqlConnector {
       );
     }
 
+    // PgRow reads binary values. Rows used to be rebuilt from the decoded
+    // values' text, named column_0, column_1, ...: getInt/getDouble/
+    // getDateTime threw and getByName did not find the columns.
     final reader = await executeReader(
       sql,
       parameters: parameters,
       statementName: statementName,
       rewriteParameters: rewriteParameters,
+      extendedQuery: true,
+      binaryResults: true,
     );
     try {
-      final rows = <PgRow>[];
-      while (await reader.read()) {
-        final values = <Uint8List?>[];
-        for (var i = 0; i < reader.fieldCount; i++) {
-          final value = reader.getValue(i);
-          values.add(value == null
-              ? null
-              : Uint8List.fromList(encoding.encode(value.toString())));
-        }
-        final builder = PgRowBuilder(
-          columnNames: List<String>.generate(
-            reader.fieldCount,
-            (i) => 'column_$i',
-            growable: false,
-          ),
-          columnTypes: List<int>.filled(reader.fieldCount, 0),
-          timeZone: timeZone,
-        );
-        for (var i = 0; i < values.length; i++) {
-          builder.addColumn(values[i], i);
-        }
-        rows.add(builder.build());
-      }
-      return rows;
+      return await (reader as DpgsqlDataReaderImpl).readAllPgRows();
     } finally {
       await reader.close();
     }
@@ -1356,12 +1490,16 @@ class DpgsqlConnector {
         continue;
       }
       if (msg is DataRowMessage) {
-        rows.add(_decodeMaterializedMap(
-          msg,
-          metadata.columnNames,
-          metadata.oids,
-          metadata.handlers,
-        ));
+        try {
+          rows.add(_decodeMaterializedMap(
+            msg,
+            metadata.columnNames,
+            metadata.oids,
+            metadata.handlers,
+          ));
+        } catch (error, stackTrace) {
+          await _drainAndRethrow(error, stackTrace);
+        }
         continue;
       }
       if (msg is CommandCompleteMessage || msg is RowDescriptionMessage) {
@@ -1397,20 +1535,54 @@ class DpgsqlConnector {
       return first;
     }
 
+    // Messages read past ReadyForQuery (a notification) belong to the
+    // connection, not to this command: they used to be dropped.
+    void keepRest() {
+      while (rawQueue.isNotEmpty) {
+        _bufferedBackendMessages
+            .add(_backendReader.parse(rawQueue.removeFirst()));
+      }
+    }
+
+    // Consumes the response up to ReadyForQuery, then throws [error]. An
+    // ErrorResponse used to be thrown with ReadyForQuery unread, so the next
+    // command returned this one's leftovers.
+    Future<Never> drainAndThrow(Object error, StackTrace stackTrace) async {
+      while (true) {
+        final raw = await nextRawMessage();
+        if (raw.typeCode == 0x5A) {
+          _handleReadyForQueryMessage();
+          break;
+        }
+        if (raw.typeCode == 0x41 ||
+            raw.typeCode == 0x4E ||
+            raw.typeCode == 0x53) {
+          _dispatchAsyncMessage(_backendReader.parse(raw));
+        }
+      }
+      keepRest();
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+
     while (true) {
       final raw = await nextRawMessage();
       switch (raw.typeCode) {
         case 0x44: // DataRow
           final row = _backendReader.parse(raw) as DataRowMessage;
-          rows.add(_decodeMaterializedMap(
-            row,
-            metadata.columnNames,
-            metadata.oids,
-            metadata.handlers,
-          ));
+          try {
+            rows.add(_decodeMaterializedMap(
+              row,
+              metadata.columnNames,
+              metadata.oids,
+              metadata.handlers,
+            ));
+          } catch (error, stackTrace) {
+            await drainAndThrow(error, stackTrace);
+          }
           continue;
         case 0x5A: // ReadyForQuery
           _handleReadyForQueryMessage();
+          keepRest();
           return rows;
         case 0x43: // CommandComplete
         case 0x54: // RowDescription
@@ -1439,16 +1611,21 @@ class DpgsqlConnector {
         case 0x45: // ErrorResponse
           final msg = _backendReader.parse(raw) as ErrorResponseMessage;
           final err = msg.error;
-          throw PostgresException(
-            severity: err.severity ?? 'ERROR',
-            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-            sqlState: err.sqlState ?? '00000',
-            messageText: err.messageText ?? 'Unknown Error',
-            detail: err.detail,
-            hint: err.hint,
+          await drainAndThrow(
+            PostgresException(
+              severity: err.severity ?? 'ERROR',
+              invariantSeverity:
+                  err.invariantSeverity ?? err.severity ?? 'ERROR',
+              sqlState: err.sqlState ?? '00000',
+              messageText: err.messageText ?? 'Unknown Error',
+              detail: err.detail,
+              hint: err.hint,
+            ),
+            StackTrace.current,
           );
         default:
           _bufferedBackendMessages.add(_backendReader.parse(raw));
+          keepRest();
           final msg = await readMessage();
           if (msg is ReadyForQueryMessage) {
             return rows;
@@ -1498,7 +1675,11 @@ class DpgsqlConnector {
         continue;
       }
       if (msg is DataRowMessage) {
-        rows.add(_decodeMaterializedRawTextMap(msg, columnNames));
+        try {
+          rows.add(_decodeMaterializedRawTextMap(msg, columnNames));
+        } catch (error, stackTrace) {
+          await _drainAndRethrow(error, stackTrace);
+        }
         continue;
       }
       if (msg is ReadyForQueryMessage) {
@@ -1651,16 +1832,20 @@ class DpgsqlConnector {
         continue;
       }
       if (msg is DataRowMessage) {
-        final result = action(PgRow(
-          buffer: msg.payload,
-          columnOffsets: msg.columnOffsets,
-          columnLengths: msg.columnLengths,
-          columnNames: columnNames,
-          columnTypes: columnTypes,
-          timeZone: timeZone,
-        ));
-        if (result is Future) {
-          await result;
+        try {
+          final result = action(PgRow(
+            buffer: msg.payload,
+            columnOffsets: msg.columnOffsets,
+            columnLengths: msg.columnLengths,
+            columnNames: columnNames,
+            columnTypes: columnTypes,
+            timeZone: timeZone,
+          ));
+          if (result is Future) {
+            await result;
+          }
+        } catch (error, stackTrace) {
+          await _drainAndRethrow(error, stackTrace);
         }
         continue;
       }
@@ -1720,14 +1905,18 @@ class DpgsqlConnector {
         continue;
       }
       if (msg is DataRowMessage) {
-        action(PgRow(
-          buffer: msg.payload,
-          columnOffsets: msg.columnOffsets,
-          columnLengths: msg.columnLengths,
-          columnNames: columnNames,
-          columnTypes: columnTypes,
-          timeZone: timeZone,
-        ));
+        try {
+          action(PgRow(
+            buffer: msg.payload,
+            columnOffsets: msg.columnOffsets,
+            columnLengths: msg.columnLengths,
+            columnNames: columnNames,
+            columnTypes: columnTypes,
+            timeZone: timeZone,
+          ));
+        } catch (error, stackTrace) {
+          await _drainAndRethrow(error, stackTrace);
+        }
         continue;
       }
       if (msg is ReadyForQueryMessage) {
@@ -1781,7 +1970,11 @@ class DpgsqlConnector {
         continue;
       }
       if (msg is DataRowMessage) {
-        rows.add(_decodeMaterializedRow(msg, oids, handlers));
+        try {
+          rows.add(_decodeMaterializedRow(msg, oids, handlers));
+        } catch (error, stackTrace) {
+          await _drainAndRethrow(error, stackTrace);
+        }
         continue;
       }
       if (msg is CommandCompleteMessage) {
@@ -1845,7 +2038,11 @@ class DpgsqlConnector {
       }
       if (msg is DataRowMessage) {
         if (!hasScalar && msg.columnCount > 0) {
-          scalar = _decodeMaterializedValue(msg, 0, oids, handlers);
+          try {
+            scalar = _decodeMaterializedValue(msg, 0, oids, handlers);
+          } catch (error, stackTrace) {
+            await _drainAndRethrow(error, stackTrace);
+          }
           hasScalar = true;
         }
         continue;
@@ -1988,7 +2185,10 @@ class DpgsqlConnector {
     }
 
     final colData = Uint8List.sublistView(payload, offset, offset + length);
-    return handlers[index]?.read(colData, isText: false) ?? colData;
+    // A handler may decode to null (a JSON `null`): it came back as the raw
+    // bytes.
+    final handler = handlers[index];
+    return handler != null ? handler.read(colData, isText: false) : colData;
   }
 
   String _decodeText(Uint8List payload, int offset, int length) {
@@ -2036,47 +2236,26 @@ class DpgsqlConnector {
     return (high << 32) | low;
   }
 
-  double _readNumericDouble(Uint8List payload, int offset, int length) {
-    final end = offset + length;
-    if (offset + 8 > end) {
-      throw FormatException('Invalid numeric length: $length');
-    }
+  double _readNumericDouble(Uint8List payload, int offset, int length) =>
+      NumericDoubleHandler.decodeBinary(payload, offset, length);
 
-    final ndigits = _readInt16(payload, offset);
-    offset += 2;
-    final weight = _readInt16(payload, offset);
-    offset += 2;
-    final sign = _readInt16(payload, offset);
-    offset += 2;
-    offset += 2;
-
-    if (sign == 0xC000) {
-      return double.nan;
+  /// An auto-prepared statement the server rejects after a schema change
+  /// ("cached plan must not change result type", 0A000) or no longer has
+  /// (26000) is unprepared, so that its next execution prepares it again. It
+  /// used to fail on every later execution on this connection.
+  void _invalidateAutoPrepared(PreparedStatement? statement, Object error) {
+    if (statement == null ||
+        error is! PostgresException ||
+        (error.sqlState != '0A000' && error.sqlState != '26000')) {
+      return;
     }
-    if (ndigits == 0) {
-      return sign == 0x4000 ? -0.0 : 0.0;
+    final name = statement.name;
+    if (name != null) {
+      _preparedRowDescriptions.remove(name);
+      _preparedMapMetadata.remove(name);
+      _autoPreparedColumns.remove(name);
     }
-
-    var value = 0.0;
-    for (var i = 0; i < ndigits; i++) {
-      if (offset + 2 > end) {
-        throw FormatException('Invalid numeric digit length: $length');
-      }
-      value = (value * 10000) + _readInt16(payload, offset);
-      offset += 2;
-    }
-
-    var scaleGroups = ndigits - weight - 1;
-    while (scaleGroups > 0) {
-      value /= 10000;
-      scaleGroups--;
-    }
-    while (scaleGroups < 0) {
-      value *= 10000;
-      scaleGroups++;
-    }
-
-    return sign == 0x4000 ? -value : value;
+    preparedStatementManager.invalidate(statement);
   }
 
   Future<void> _writePendingUnprepareMessages() async {
@@ -2086,6 +2265,7 @@ class DpgsqlConnector {
       if (name == null || name.isEmpty) {
         continue;
       }
+      _autoPreparedColumns.remove(name);
       await _frontendMessages!.writeCloseStatement(name, flush: false);
     }
   }
@@ -2183,6 +2363,20 @@ class DpgsqlConnector {
       timestamp: timestamp,
       replyRequested: replyRequested,
     );
+  }
+
+  /// Reads the answer to CopyFail: an error, then ReadyForQuery. It used to
+  /// be left unread, so the next command read it as its own. A server that
+  /// does not answer within [timeout] gets its connection closed instead.
+  Future<void> awaitCopyFailAnswer(
+      {Duration timeout = const Duration(seconds: 5)}) async {
+    try {
+      await awaitCopyComplete().timeout(timeout);
+    } on PostgresException {
+      // The expected answer.
+    } on TimeoutException {
+      await close();
+    }
   }
 
   Future<void> writeCopyDone() async {
@@ -2300,15 +2494,15 @@ class DpgsqlConnector {
       resultMode: resultMode,
     );
 
-    _pipelineQueue!.enqueue(pendingCmd);
-
-    // Send Parse, Bind, Execute without forcing a flush
+    // Send Parse, Bind, Execute without forcing a flush. Enqueued after: a
+    // parameter that fails to encode leaves no command waiting for a response.
     await _sendQueryMessages(
       sql: sql,
       statementName: statementName,
       parameters: parameters,
       resultMode: resultMode,
     );
+    _pipelineQueue!.enqueue(pendingCmd);
 
     final writer = _msgWriter;
     if (writer != null) {
@@ -2343,17 +2537,7 @@ class DpgsqlConnector {
       paramHandlers.add(handler);
     }
 
-    // Write Parse if not already prepared
-    if (statementName == null || statementName.isEmpty) {
-      await _frontendMessages!.writeParse(
-        statementName: '',
-        query: sql,
-        parameterTypeOids: paramOids,
-        flush: false,
-      );
-    }
-
-    // Write Bind
+    // Encoded before anything is written (see executeReader).
     final encodedParams = <Uint8List?>[];
     final parameterFormatCodes = <int>[];
     for (var i = 0; i < params.length; i++) {
@@ -2365,6 +2549,17 @@ class DpgsqlConnector {
       );
     }
 
+    // Write Parse if not already prepared
+    if (statementName == null || statementName.isEmpty) {
+      await _frontendMessages!.writeParse(
+        statementName: '',
+        query: sql,
+        parameterTypeOids: paramOids,
+        flush: false,
+      );
+    }
+
+    // Write Bind
     await _frontendMessages!.writeBind(
       portalName: '',
       statementName: statementName ?? '',

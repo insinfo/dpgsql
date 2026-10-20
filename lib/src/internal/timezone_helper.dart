@@ -71,10 +71,16 @@ class TimezoneHelper {
     String value, {
     TimeZoneSettings timeZone = const TimeZoneSettings.utc(),
   }) {
+    final fast = _parseIsoFields(value);
+    if (fast != null) {
+      return timeZone.forceDecodeDateAsUTC
+          ? DateTime.utc(fast.year, fast.month, fast.day)
+          : DateTime(fast.year, fast.month, fast.day);
+    }
     if (_isInfinityText(value)) {
       return _handleInfinity('Date', timeZone);
     }
-    final raw = DateTime.parse(value);
+    final raw = DateTime.parse(_isoText(value));
     return timeZone.forceDecodeDateAsUTC
         ? DateTime.utc(raw.year, raw.month, raw.day)
         : DateTime(raw.year, raw.month, raw.day);
@@ -110,10 +116,20 @@ class TimezoneHelper {
     String value, {
     TimeZoneSettings timeZone = const TimeZoneSettings.utc(),
   }) {
+    final fast = _parseIsoFields(value);
+    if (fast != null && fast.offsetSeconds == null) {
+      final ms = fast.microsecond ~/ 1000;
+      final us = fast.microsecond % 1000;
+      return timeZone.forceDecodeTimestampAsUTC
+          ? DateTime.utc(fast.year, fast.month, fast.day, fast.hour,
+              fast.minute, fast.second, ms, us)
+          : DateTime(fast.year, fast.month, fast.day, fast.hour, fast.minute,
+              fast.second, ms, us);
+    }
     if (_isInfinityText(value)) {
       return _handleInfinity('Timestamp', timeZone);
     }
-    final raw = DateTime.parse(value.replaceFirst(' ', 'T'));
+    final raw = DateTime.parse(_isoText(value));
     return timeZone.forceDecodeTimestampAsUTC
         ? DateTime.utc(
             raw.year,
@@ -166,10 +182,19 @@ class TimezoneHelper {
     String value, {
     TimeZoneSettings timeZone = const TimeZoneSettings.utc(),
   }) {
+    final fast = _parseIsoFields(value);
+    if (fast != null && fast.offsetSeconds != null) {
+      final utc = DateTime.utc(fast.year, fast.month, fast.day, fast.hour,
+              fast.minute, fast.second, fast.microsecond ~/ 1000,
+              fast.microsecond % 1000)
+          .subtract(Duration(seconds: fast.offsetSeconds!));
+      if (timeZone.forceDecodeTimestamptzAsUTC) return utc;
+      return _decodeTimestampTzAsConfiguredLocal(utc, timeZone);
+    }
     if (_isInfinityText(value)) {
       return _handleInfinity('Timestamptz', timeZone);
     }
-    final raw = DateTime.parse(value.replaceFirst(' ', 'T'));
+    final raw = DateTime.parse(_isoText(value));
     if (timeZone.forceDecodeTimestamptzAsUTC) {
       return raw.toUtc();
     }
@@ -236,6 +261,117 @@ class TimezoneHelper {
       throw ArgumentError('$typeName value is infinity');
     }
     return null;
+  }
+
+  /// PostgreSQL's text form of a date or timestamp as ISO 8601 for
+  /// [DateTime.parse]. Years before Christ (`0044-03-15 BC`) used to throw a
+  /// FormatException; ISO 8601 counts them as 0 (1 BC), -1 (2 BC), ...
+  /// The fields of `YYYY-MM-DD[ HH:MM:SS[.ffffff]][+HH[:MM[:SS]]]`, the
+  /// text PostgreSQL sends with DateStyle ISO, read digit by digit; `null`
+  /// for anything else (BC dates, infinity, years after 9999), which goes
+  /// through [DateTime.parse]. `DateTime.parse` (a regular expression, then
+  /// a second DateTime) took about 30 µs per value.
+  static ({
+    int year,
+    int month,
+    int day,
+    int hour,
+    int minute,
+    int second,
+    int microsecond,
+    int? offsetSeconds,
+  })? _parseIsoFields(String s) {
+    final length = s.length;
+    if (length < 10) return null;
+    int digits(int start, int count) {
+      var value = 0;
+      for (var i = start; i < start + count; i++) {
+        final d = s.codeUnitAt(i) - 0x30;
+        if (d < 0 || d > 9) return -1;
+        value = value * 10 + d;
+      }
+      return value;
+    }
+
+    final year = digits(0, 4);
+    if (year < 0 || s.codeUnitAt(4) != 0x2d || s.codeUnitAt(7) != 0x2d) {
+      return null;
+    }
+    final month = digits(5, 2);
+    final day = digits(8, 2);
+    if (month < 0 || day < 0) return null;
+    var hour = 0, minute = 0, second = 0, microsecond = 0;
+    int? offsetSeconds;
+    var i = 10;
+    if (i < length) {
+      if (s.codeUnitAt(i) != 0x20 || length < 19) return null;
+      hour = digits(11, 2);
+      minute = digits(14, 2);
+      second = digits(17, 2);
+      if (hour < 0 ||
+          minute < 0 ||
+          second < 0 ||
+          s.codeUnitAt(13) != 0x3a ||
+          s.codeUnitAt(16) != 0x3a) {
+        return null;
+      }
+      i = 19;
+      if (i < length && s.codeUnitAt(i) == 0x2e) {
+        i++;
+        var count = 0;
+        while (i < length) {
+          final d = s.codeUnitAt(i) - 0x30;
+          if (d < 0 || d > 9) break;
+          if (count < 6) microsecond = microsecond * 10 + d;
+          count++;
+          i++;
+        }
+        if (count == 0) return null;
+        for (; count < 6; count++) {
+          microsecond *= 10;
+        }
+      }
+      if (i < length) {
+        final sign = s.codeUnitAt(i);
+        if (sign != 0x2b && sign != 0x2d) return null;
+        if (length < i + 3) return null;
+        var offset = digits(i + 1, 2) * 3600;
+        if (offset < 0) return null;
+        i += 3;
+        for (final unit in const [60, 1]) {
+          if (i == length) break;
+          if (s.codeUnitAt(i) != 0x3a || length < i + 3) return null;
+          final part = digits(i + 1, 2);
+          if (part < 0) return null;
+          offset += part * unit;
+          i += 3;
+        }
+        if (i != length) return null;
+        offsetSeconds = sign == 0x2d ? -offset : offset;
+      }
+    }
+    return (
+      year: year,
+      month: month,
+      day: day,
+      hour: hour,
+      minute: minute,
+      second: second,
+      microsecond: microsecond,
+      offsetSeconds: offsetSeconds,
+    );
+  }
+
+  static String _isoText(String value) {
+    var text = value.trim();
+    if (text.endsWith(' BC')) {
+      text = text.substring(0, text.length - 3);
+      final year = RegExp(r'^\d+').firstMatch(text)!;
+      final isoYear = int.parse(year[0]!) - 1;
+      text = (isoYear == 0 ? '0000' : '-${'$isoYear'.padLeft(6, '0')}') +
+          text.substring(year.end);
+    }
+    return text.replaceFirst(' ', 'T');
   }
 
   static bool _isInfinityText(String value) {

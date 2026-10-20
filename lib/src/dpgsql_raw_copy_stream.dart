@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'internal/dpgsql_connector.dart';
+import 'postgres_exception.dart';
 import 'protocol/backend_messages.dart';
 
 typedef DpgsqlCopyProgressCallback = void Function(int bytesTransferred);
@@ -54,9 +55,9 @@ class DpgsqlRawCopyStream {
       throw StateError('COPY operation is not readable');
     }
 
-    final packet = await _connector.readCopyDataPacket();
+    final packet = await _endOnError(_connector.readCopyDataPacket);
     if (packet == null) {
-      await _connector.awaitCopyComplete();
+      await _endOnError(_connector.awaitCopyComplete);
       _completed = true;
       _close(reusable: true);
       return null;
@@ -116,8 +117,10 @@ class DpgsqlRawCopyStream {
       throw StateError('COPY operation is not writable');
     }
 
-    await _connector.writeCopyDone();
-    await _connector.awaitCopyComplete();
+    await _endOnError(() async {
+      await _connector.writeCopyDone();
+      await _connector.awaitCopyComplete();
+    });
     _completed = true;
     _close(reusable: true);
   }
@@ -128,8 +131,15 @@ class DpgsqlRawCopyStream {
       return;
     }
 
-    if (canWrite) {
-      await _connector.writeCopyFail(message);
+    try {
+      if (canWrite) {
+        await _connector.writeCopyFail(message);
+      }
+      // The response (the CopyFail error, or the rest of a COPY TO) was left
+      // unread: the next command on this connection read it as its own.
+      await _readRest();
+    } catch (_) {
+      // The connector is discarded anyway.
     }
     _completed = true;
     _close(reusable: false);
@@ -143,7 +153,36 @@ class DpgsqlRawCopyStream {
       await cancel();
       return;
     }
+    if (!_completed) {
+      // A COPY TO not read to the end: its remaining data used to be left
+      // unread, and the next command read it as its own result.
+      await _endOnError(_readRest);
+      _completed = true;
+    }
     _close(reusable: _completed);
+  }
+
+  /// Reads the rest of the response, up to ReadyForQuery.
+  Future<void> _readRest() async {
+    if (canWrite) {
+      await _connector.awaitCopyFailAnswer();
+      return;
+    }
+    while (await _connector.readCopyDataPacket() != null) {}
+    await _connector.awaitCopyComplete();
+  }
+
+  /// Ends the operation when [action] fails. A PostgreSQL error (raised
+  /// after its ReadyForQuery) leaves the connection usable; a failed COPY used
+  /// to keep the connection's turn, so every later command waited forever.
+  Future<T> _endOnError<T>(Future<T> Function() action) async {
+    try {
+      return await action();
+    } catch (error) {
+      _completed = true;
+      _close(reusable: error is PostgresException);
+      rethrow;
+    }
   }
 
   void _throwIfClosed() {

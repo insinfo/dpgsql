@@ -65,7 +65,7 @@ class DpgsqlBinaryExporter {
 
   /// Starts reading a row. Returns number of columns, or -1 if end of data.
   Future<int> startRow() async {
-    await _input.ensureBytes(2);
+    await _ensureBytes(2);
     final count = _input.readInt16();
     if (count == -1) {
       return -1; // Trailer found
@@ -75,11 +75,11 @@ class DpgsqlBinaryExporter {
 
   /// Reads a value of type T from the current column.
   Future<T?> read<T>() async {
-    await _input.ensureBytes(4);
+    await _ensureBytes(4);
     final len = _input.readInt32();
     if (len == -1) return null; // NULL
 
-    await _input.ensureBytes(len);
+    await _ensureBytes(len);
     final bytes = Uint8List.fromList(_input.readBytes(len));
 
     // Resolve handler
@@ -97,6 +97,20 @@ class DpgsqlBinaryExporter {
 
     throw UnimplementedError(
         'Binary export for type $T not yet supported (no handler found)');
+  }
+
+  /// A PostgreSQL error (raised after its ReadyForQuery) ends the export and
+  /// leaves the connection usable. It used to keep the connection's turn,
+  /// and dispose() waited for a ReadyForQuery already read: every later
+  /// command waited forever.
+  Future<void> _ensureBytes(int count) async {
+    try {
+      await _input.ensureBytes(count);
+    } on PostgresException {
+      _isDisposed = true;
+      _notifyClosed(reusable: true);
+      rethrow;
+    }
   }
 
   Future<void> dispose() async {

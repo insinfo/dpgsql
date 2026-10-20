@@ -513,6 +513,46 @@ class DpgsqlConnectionStringBuilder {
   set decodeJsonAsString(bool value) =>
       _parameters['Decode Json As String'] = value.toString();
 
+  /// Decode PostgreSQL `numeric` values as their exact decimal text
+  /// (`'150.50'`, `'12345678901234567.89'`, `'NaN'`) instead of a `double`,
+  /// which loses digits beyond about 15 significant ones and the scale.
+  /// Same as `numericAsString` in dargres; postgres/postgres_fork always
+  /// return text. Disabled by default.
+  bool get decodeNumericAsString => _getBool(
+        false,
+        'Decode Numeric As String',
+        'DecodeNumericAsString',
+        'Numeric As String',
+        'NumericAsString',
+      );
+  set decodeNumericAsString(bool value) =>
+      _parameters['Decode Numeric As String'] = value.toString();
+
+  /// Decode PostgreSQL `numeric` values as [DpgsqlDecimal] (exact; its
+  /// `toString()` is the decimal text). Takes precedence over
+  /// [decodeNumericAsString]. Disabled by default.
+  bool get useCustomDecimal => _getBool(
+        false,
+        'Use Custom Decimal',
+        'UseCustomDecimal',
+      );
+  set useCustomDecimal(bool value) =>
+      _parameters['Use Custom Decimal'] = value.toString();
+
+  /// Decode the types without a natural Dart type as the text the server
+  /// prints for them: `interval` (`'1 day 02:03:04'`), `time`/`timetz`,
+  /// `inet`/`cidr`/`macaddr`, geometric types, `bit`/`varbit`, `tsvector`,
+  /// ranges (`'[1,5)'`) and their arrays (lists of texts); `money` as the
+  /// decimal amount (`'12.34'`). Without it they are DpgsqlInterval,
+  /// DpgsqlMoney, DpgsqlPoint, DpgsqlRange... Disabled by default.
+  bool get decodeExtendedTypesAsText => _getBool(
+        false,
+        'Decode Extended Types As Text',
+        'DecodeExtendedTypesAsText',
+      );
+  set decodeExtendedTypesAsText(bool value) =>
+      _parameters['Decode Extended Types As Text'] = value.toString();
+
   /// Sends untyped string parameters as PostgreSQL `unknown` by default,
   /// allowing the server to infer column types such as timestamp, inet and uuid
   /// in extended-query INSERT/UPDATE statements.

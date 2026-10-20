@@ -16,6 +16,9 @@ class DpgsqlTransaction {
 
   DpgsqlConnection get connection => _connection;
 
+  /// True after [commit] or [rollback].
+  bool get isCompleted => _isCompleted;
+
   /// Commits the database transaction.
   Future<void> commit() async {
     _checkCompleted();

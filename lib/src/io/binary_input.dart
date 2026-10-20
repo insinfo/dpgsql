@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'uint8_list_pool.dart';
-
 /// Leitura binária de alto nível com API síncrona (do ponto de vista do parser),
 /// mas alimentada por IO assíncrono embaixo.
 abstract class BinaryInput {
@@ -43,7 +41,7 @@ class SocketBinaryInput implements BinaryInput {
     int initialCapacity = 4096,
     void Function()? onClosed,
     void Function()? onData,
-  })  : _buffer = Uint8ListPool.rent(initialCapacity),
+  })  : _buffer = Uint8List(initialCapacity),
         _onClosed = onClosed,
         _onDataArrived = onData {
     stream.listen(
@@ -105,6 +103,13 @@ class SocketBinaryInput implements BinaryInput {
   }
 
   /// Adiciona novos dados ao buffer, realocando apenas quando necessário.
+  ///
+  /// Bytes already read are never written again: messages, rows and values
+  /// handed out are views of this buffer (zero copy). Moving the unread bytes
+  /// to the start, writing again from offset 0 once everything was read, or
+  /// reusing a released buffer changed rows still being read (a reader's
+  /// current row after an await, messages queued for later) and values
+  /// already returned (bytea).
   void _appendData(List<int> data) {
     if (data.isEmpty) return;
 
@@ -115,36 +120,24 @@ class SocketBinaryInput implements BinaryInput {
       return;
     }
 
-    // Realoca crescendo a capacidade para evitar realocações frequentes.
+    // A new buffer; the old one is left to the views that still use it. Sized
+    // for what is needed, not for the largest message seen so far.
     final unread = _writeLength - _readOffset;
     final needed = unread + data.length;
-    if (needed <= _buffer.length) {
-      // Move os dados não lidos para o início e escreve na sequência.
-      if (unread > 0) {
-        _buffer.setRange(0, unread, _buffer, _readOffset);
-      }
-      _readOffset = 0;
-      _writeLength = unread;
-      _buffer.setRange(_writeLength, _writeLength + data.length, data);
-      _writeLength += data.length;
-      return;
+    var newCapacity = 65536;
+    while (newCapacity < needed) {
+      newCapacity *= 2;
     }
-    var newCapacity = _buffer.length * 2;
-    if (newCapacity < needed) {
-      newCapacity = needed;
-    }
-    final newBuffer = Uint8ListPool.rent(newCapacity);
+    final newBuffer = Uint8List(newCapacity);
 
     if (unread > 0) {
       newBuffer.setRange(0, unread, _buffer, _readOffset);
     }
     newBuffer.setRange(unread, unread + data.length, data);
 
-    final oldBuffer = _buffer;
     _buffer = newBuffer;
     _readOffset = 0;
     _writeLength = unread + data.length;
-    Uint8ListPool.release(oldBuffer);
   }
 
   int _consumeOffset(int length) {
@@ -158,13 +151,6 @@ class SocketBinaryInput implements BinaryInput {
 
     final startOffset = _readOffset;
     _readOffset += length;
-
-    // Se consumiu tudo, reseta os ponteiros para liberar espaço.
-    if (_readOffset == _writeLength) {
-      _readOffset = 0;
-      _writeLength = 0;
-    }
-
     return startOffset;
   }
 
@@ -249,7 +235,7 @@ class SocketBinaryInput implements BinaryInput {
       return;
     }
     _disposed = true;
-    Uint8ListPool.release(_buffer);
+    // Not released to the pool: values returned to callers may be views of it.
     _buffer = Uint8List(0);
     _readOffset = 0;
     _writeLength = 0;

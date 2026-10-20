@@ -63,7 +63,12 @@ class DpgsqlConnection {
   DpgsqlConnection.fromConnector(this._connector, this._returnToPoolAction)
       : connectionString = '',
         _connectionStringBuilder = null,
-        _state = ConnectionState.open;
+        _state = ConnectionState.open {
+    // Notifications, notices and onConnectionLost used to be wired only by
+    // open(): on a DpgsqlDataSource connection they never emitted (LISTEN did
+    // not work on pooled connections).
+    _attach(_connector!);
+  }
 
   /// Creates a connection from an already configured builder, avoiding the
   /// need to serialize options to a connection string.
@@ -77,11 +82,61 @@ class DpgsqlConnection {
 
   Stream<DpgsqlNotificationEventArgs> get notifications =>
       _notificationController.stream;
-  final _notificationController =
-      StreamController<DpgsqlNotificationEventArgs>.broadcast();
+  late final _notificationController =
+      StreamController<DpgsqlNotificationEventArgs>.broadcast(
+          onListen: _forwardConnectorEvents,
+          onCancel: () {
+            _notificationSubscription?.cancel();
+            _notificationSubscription = null;
+          });
 
   Stream<ErrorOrNoticeMessage> get notices => _noticeController.stream;
-  final _noticeController = StreamController<ErrorOrNoticeMessage>.broadcast();
+  late final _noticeController =
+      StreamController<ErrorOrNoticeMessage>.broadcast(
+          onListen: _forwardConnectorEvents,
+          onCancel: () {
+            _noticeSubscription?.cancel();
+            _noticeSubscription = null;
+          });
+
+  StreamSubscription<DpgsqlNotificationEventArgs>? _notificationSubscription;
+  StreamSubscription<ErrorOrNoticeMessage>? _noticeSubscription;
+
+  /// Forwards the connector's notifications and notices to the listeners of
+  /// this connection, while it holds the connector. Subscribed on demand: a
+  /// pooled connector outlives the connections that rent it.
+  void _forwardConnectorEvents() {
+    final connector = _connector;
+    if (connector == null) return;
+    if (_notificationController.hasListener) {
+      _notificationSubscription ??=
+          connector.notifications.listen(_notificationController.add);
+    }
+    if (_noticeController.hasListener) {
+      _noticeSubscription ??= connector.notices.listen(_noticeController.add);
+    }
+  }
+
+  /// The connector is released (closed or returned to the pool): its events
+  /// belong to its next user.
+  void _stopForwardingConnectorEvents() {
+    _notificationSubscription?.cancel();
+    _notificationSubscription = null;
+    _noticeSubscription?.cancel();
+    _noticeSubscription = null;
+  }
+
+  void _attach(DpgsqlConnector connector) {
+    _forwardConnectorEvents();
+    // Notifications arrive between commands too (LISTEN): read them when
+    // the connection is idle instead of waiting for the next command.
+    connector.onDataArrived = _scheduleIdleDrain;
+    connector.onConnectionLost = () {
+      if (identical(_connector, connector)) {
+        _connectionLostController.add(null);
+      }
+    };
+  }
 
   /// Emits when the server closes an open connection (terminated backend,
   /// restart, network failure detected by the socket).
@@ -116,26 +171,15 @@ class DpgsqlConnection {
         decodeNetworkTypesAsString: builder.decodeNetworkTypesAsString,
         decodeUuidAsString: builder.decodeUuidAsString,
         decodeJsonAsString: builder.decodeJsonAsString,
+        decodeNumericAsString: builder.decodeNumericAsString,
+        useCustomDecimal: builder.useCustomDecimal,
+        decodeExtendedTypesAsText: builder.decodeExtendedTypesAsText,
         inferStringParametersAsUnknown: builder.inferStringParametersAsUnknown,
         useExtendedQueryForUnparameterizedCommands:
             builder.useExtendedQueryForUnparameterizedCommands,
       );
 
-      _connector!.notifications.listen((e) {
-        _notificationController.add(e);
-      });
-      _connector!.notices.listen((e) {
-        _noticeController.add(e);
-      });
-      final connector = _connector!;
-      // Notifications arrive between commands too (LISTEN): read them when
-      // the connection is idle instead of waiting for the next command.
-      connector.onDataArrived = _scheduleIdleDrain;
-      connector.onConnectionLost = () {
-        if (identical(_connector, connector)) {
-          _connectionLostController.add(null);
-        }
-      };
+      _attach(_connector!);
 
       await _connector!.open();
       _state = ConnectionState.open;
@@ -163,6 +207,7 @@ class DpgsqlConnection {
       return Future<void>.value();
     }
 
+    _stopForwardingConnectorEvents();
     final returnToPool = _returnToPoolAction;
     if (returnToPool != null && isSafeToReturnToPool) {
       returnToPool(connector);
@@ -240,6 +285,70 @@ class DpgsqlConnection {
     );
   }
 
+  /// Runs [action] in a transaction: commits when it completes (unless it
+  /// committed or rolled back itself) and rolls back when it throws.
+  ///
+  /// The transaction holds the connection: commands (and other
+  /// [runInTransaction] calls) from other callers wait until it ends, then
+  /// run in call order. Commands issued from [action], on [tx] or on this
+  /// connection, concurrent ones included, run inside it; they are
+  /// recognized through a `Zone` value. Do not wait, inside [action], for
+  /// work started outside it that uses this connection: that work waits for
+  /// the transaction, which waits for it.
+  ///
+  /// A transaction opened with [beginTransaction] gets no such protection:
+  /// with [queueConcurrentCalls], other callers' commands run inside it.
+  Future<T> runInTransaction<T>(
+    Future<T> Function(DpgsqlTransaction tx) action, {
+    IsolationLevel isolationLevel = IsolationLevel.readCommitted,
+  }) async {
+    if (_connector == null) throw StateError('Connection closed');
+    if (_inOwnTransaction) {
+      throw StateError('DpgsqlConnection: runInTransaction called inside its '
+          'own callback; use the transaction it received.');
+    }
+    if (!queueConcurrentCalls &&
+        (_transactionGate != null || _activeTransaction)) {
+      throw StateError(
+          'DpgsqlConnection: a transaction is already active on this '
+          'connection.');
+    }
+    while (_transactionGate != null) {
+      await _transactionGate!.future;
+    }
+    final gate = Completer<void>();
+    _transactionGate = gate;
+    try {
+      return await runZoned(() => _runTransaction(action, isolationLevel),
+          zoneValues: {_transactionZoneKey: this});
+    } finally {
+      _transactionGate = null;
+      gate.complete();
+    }
+  }
+
+  Future<T> _runTransaction<T>(
+    Future<T> Function(DpgsqlTransaction tx) action,
+    IsolationLevel isolationLevel,
+  ) async {
+    final tx = await beginTransaction(isolationLevel);
+    try {
+      final result = await action(tx);
+      if (!tx.isCompleted) await tx.commit();
+      return result;
+    } catch (error, stackTrace) {
+      if (!tx.isCompleted && _connector != null) {
+        try {
+          await tx.rollback();
+        } catch (_) {
+          // Keep the original error; the connection is not reusable.
+          _discardConnectorOnClose = true;
+        }
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+
   Future<DpgsqlDataReader> executeReader(String commandText,
       {DpgsqlParameterCollection? parameters,
       String? statementName,
@@ -254,7 +363,7 @@ class DpgsqlConnection {
           statementName: statementName,
           rewriteParameters: rewriteParameters,
           resultMode: resultMode);
-      return _trackReader(reader);
+      return _trackReader(reader, holdsTurn: true);
     });
   }
 
@@ -402,7 +511,7 @@ class DpgsqlConnection {
   /// Starts a binary COPY FROM STDIN operation.
   Future<DpgsqlBinaryImporter> beginBinaryImport(String copyFromCommand) async {
     if (_connector == null) throw StateError('Connection closed');
-    _checkIdle();
+    await _beginCopyTurn();
     _activeCopyOperation = true;
     try {
       final importer = DpgsqlBinaryImporter(
@@ -415,6 +524,7 @@ class DpgsqlConnection {
     } catch (_) {
       _activeCopyOperation = false;
       _discardConnectorOnClose = true;
+      _releaseTurn();
       rethrow;
     }
   }
@@ -422,7 +532,7 @@ class DpgsqlConnection {
   /// Starts a binary COPY TO STDOUT operation.
   Future<DpgsqlBinaryExporter> beginBinaryExport(String copyToCommand) async {
     if (_connector == null) throw StateError('Connection closed');
-    _checkIdle();
+    await _beginCopyTurn();
     _activeCopyOperation = true;
     try {
       final exporter = DpgsqlBinaryExporter(
@@ -435,6 +545,7 @@ class DpgsqlConnection {
     } catch (_) {
       _activeCopyOperation = false;
       _discardConnectorOnClose = true;
+      _releaseTurn();
       rethrow;
     }
   }
@@ -449,7 +560,7 @@ class DpgsqlConnection {
     DpgsqlCopyProgressCallback? onProgress,
   }) async {
     if (_connector == null) throw StateError('Connection closed');
-    _checkIdle();
+    await _beginCopyTurn();
     _activeCopyOperation = true;
     try {
       final stream = DpgsqlRawCopyStream(
@@ -463,6 +574,7 @@ class DpgsqlConnection {
     } catch (_) {
       _activeCopyOperation = false;
       _discardConnectorOnClose = true;
+      _releaseTurn();
       rethrow;
     }
   }
@@ -493,7 +605,7 @@ class DpgsqlConnection {
     }
     return _exclusive(() async {
       final reader = await _connector!.executeBatch(batch);
-      return _trackReader(reader);
+      return _trackReader(reader, holdsTurn: true);
     });
   }
 
@@ -717,6 +829,13 @@ class DpgsqlConnection {
   /// connection; a second one used to interleave with the first and both read
   /// each other's responses (wrong results or a crashed read loop).
   void _checkIdle() {
+    if (!(_connector?.isConnected ?? false)) {
+      // Writing to the closed socket failed with a SocketException or, in
+      // debug mode, an uncaught assertion of dart:io.
+      _discardConnectorOnClose = true;
+      throw StateError(
+          'DpgsqlConnection: the connection to the server was lost.');
+    }
     if (_commandInProgress || hasActiveReader || _activeCopyOperation) {
       throw StateError(
           'DpgsqlConnection: another command is still running on this '
@@ -726,16 +845,95 @@ class DpgsqlConnection {
     }
   }
 
-  /// Runs [operation] as the only command on this connection. Pipeline mode
-  /// queues commands by design and is not restricted.
+  /// With true (the default), concurrent callers of this connection wait
+  /// for their turn (FIFO) instead of failing: a command waits until the
+  /// previous one finished and its reader (or COPY) was closed, and commands
+  /// from outside a [runInTransaction] callback wait for the transaction to
+  /// end. With false, a command issued while another one runs fails with a
+  /// [StateError] (the 1.0.2 behavior, which shows a connection shared by
+  /// mistake), and so does a second [runInTransaction].
+  ///
+  /// A reader that is never closed keeps the turn: the commands queued
+  /// behind it wait forever.
+  bool queueConcurrentCalls = true;
+
+  /// The turn of the last queued caller; it completes when that caller is
+  /// done with the connection.
+  Future<void> _turnTail = Future<void>.value();
+
+  /// Ends the running caller's turn (see [_exclusive]); `null` when nobody
+  /// holds one or the calls are not queued.
+  void Function()? _turnRelease;
+
+  /// Completes when the running [runInTransaction] ends; `null` when there
+  /// is none.
+  Completer<void>? _transactionGate;
+
+  /// Zone value set while a [runInTransaction] callback runs.
+  static final Object _transactionZoneKey = Object();
+
+  /// Callers queued for, or holding, a turn. The idle drain (notifications)
+  /// does not read the socket while there is one: it would race the next
+  /// command, which starts a few microtasks after the previous turn ends.
+  int _turnsPending = 0;
+
+  bool get _inOwnTransaction =>
+      _transactionGate != null &&
+      identical(Zone.current[_transactionZoneKey], this);
+
+  /// Waits for this caller's turn. No await happens before the caller is
+  /// queued when there is no transaction, so call order is execution order.
+  Future<void> _takeTurn() async {
+    _turnsPending++;
+    while (_transactionGate != null && !_inOwnTransaction) {
+      await _transactionGate!.future;
+    }
+    final previous = _turnTail;
+    final turn = Completer<void>();
+    _turnTail = turn.future;
+    await previous;
+    _turnRelease = () {
+      if (turn.isCompleted) return;
+      _turnsPending--;
+      turn.complete();
+    };
+    if (_connector == null) {
+      _releaseTurn();
+      throw StateError('Connection closed');
+    }
+  }
+
+  void _releaseTurn() {
+    final release = _turnRelease;
+    _turnRelease = null;
+    release?.call();
+  }
+
+  Future<void> _beginCopyTurn() async {
+    if (queueConcurrentCalls) await _takeTurn();
+    _checkIdle();
+  }
+
+  /// Runs [operation] as the only command on this connection, in its turn
+  /// (see [queueConcurrentCalls]). A reader it returns keeps the turn until
+  /// it is closed. Pipeline mode queues commands by design and is not
+  /// restricted.
   Future<T> _exclusive<T>(Future<T> Function() operation) async {
     if (_connector?.inPipelineMode ?? false) return operation();
-    _checkIdle();
+    if (queueConcurrentCalls) await _takeTurn();
+    try {
+      _checkIdle();
+    } catch (_) {
+      _releaseTurn();
+      rethrow;
+    }
     _commandInProgress = true;
     try {
       return await operation();
     } finally {
       _commandInProgress = false;
+      // Not taken by a reader (_trackReader): the command is over.
+      _releaseTurn();
       _scheduleIdleDrain();
     }
   }
@@ -752,6 +950,7 @@ class DpgsqlConnection {
       if (connector == null ||
           _state != ConnectionState.open ||
           _commandInProgress ||
+          _turnsPending > 0 ||
           hasActiveReader ||
           _activeCopyOperation ||
           connector.inPipelineMode) {
@@ -761,18 +960,25 @@ class DpgsqlConnection {
     });
   }
 
-  DpgsqlDataReader _trackReader(DpgsqlDataReader reader) {
+  /// [holdsTurn]: called from [_exclusive]; the reader keeps the command's
+  /// turn until it is closed.
+  DpgsqlDataReader _trackReader(DpgsqlDataReader reader,
+      {bool holdsTurn = false}) {
     _activeReaderCount++;
+    final release = holdsTurn ? _turnRelease : null;
+    if (holdsTurn) _turnRelease = null;
     return _TrackedDpgsqlDataReader(reader, () {
       if (_activeReaderCount > 0) {
         _activeReaderCount--;
       }
+      release?.call();
       _scheduleIdleDrain();
     });
   }
 
   void _handleCopyOperationClosed(bool reusable) {
     _activeCopyOperation = false;
+    _releaseTurn();
     _scheduleIdleDrain();
     if (!reusable) {
       _discardConnectorOnClose = true;

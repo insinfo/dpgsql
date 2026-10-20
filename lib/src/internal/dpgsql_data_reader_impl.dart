@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
 
+import '../data/pg_row.dart';
 import '../dpgsql_batch_command.dart';
 import '../dpgsql_data_reader.dart';
 import '../pg_result_mode.dart';
@@ -9,6 +10,7 @@ import '../postgres_batch_exception.dart';
 import '../postgres_exception.dart';
 import '../protocol/backend_messages.dart';
 import '../types/oid.dart';
+import '../types/custom_type_handlers.dart';
 import '../types/type_handler.dart';
 import 'dpgsql_connector.dart';
 import 'pending_command.dart';
@@ -32,12 +34,22 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
   final PgResultMode _resultMode;
 
   RowDescriptionMessage? _rowDescription;
+
+  /// The columns of the current result (null before init or without rows).
+  RowDescriptionMessage? get rowDescriptionMessage => _rowDescription;
   DataRowMessage? _currentRow;
   List<Object?>? _currentRowValues;
   int _recordsAffected = 0;
   bool _closed = false; // Public API closed state (user cannot read more)
   bool _drained = false; // Protocol state (ReadyForQuery received)
   bool get _isPipelineReader => _pendingCommands != null;
+
+  /// An error consumes the rest of the response before it is thrown: always
+  /// outside a pipeline, and for the readers that own their Sync (a batch,
+  /// executeCommandsPipelined). A batch whose first command failed used to
+  /// throw from init() with ReadyForQuery unread, so the next command
+  /// returned null and every later one the previous command's result.
+  bool get _drainsOnError => !_isPipelineReader || _drainReadyOnClose;
   int _pendingCommandIndex = -1;
   PendingCommand? _currentPendingCommand;
 
@@ -109,7 +121,7 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
       }
       if (msg is ErrorResponseMessage) {
         final exception = _createExceptionForError(msg);
-        if (!_isPipelineReader) {
+        if (_drainsOnError) {
           await _drainUntilReadyForQuery();
         }
         throw exception;
@@ -132,10 +144,20 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
   /// cancelled statement, used to leave ReadyForQuery unread).
   Future<Never> _failAndDrain(ErrorResponseMessage msg) async {
     final exception = _createExceptionForError(msg);
-    if (!_isPipelineReader) {
+    if (_drainsOnError) {
       await _drainUntilReadyForQuery();
     }
     throw exception;
+  }
+
+  /// Rethrows [error] (a value that failed to decode) after consuming the
+  /// rest of the response, like [_failAndDrain]: leaving it unread made every
+  /// later command return the previous command's result.
+  Future<Never> _drainAndRethrow(Object error, StackTrace stackTrace) async {
+    if (_drainsOnError) {
+      await _drainUntilReadyForQuery();
+    }
+    Error.throwWithStackTrace(error, stackTrace);
   }
 
   Never _handleError(ErrorResponseMessage msg) {
@@ -482,7 +504,10 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     final isText = _fieldIsText?[ordinal] ?? true;
 
     if (isText) {
-      return double.parse(_decodeText(payload, offset, length));
+      final text = _decodeText(payload, offset, length);
+      return oid == Oid.float4
+          ? FloatHandler.parseText(text)
+          : double.parse(text);
     }
     if (oid == Oid.float4 && length == 4) {
       return ByteData.view(payload.buffer, payload.offsetInBytes + offset, 4)
@@ -613,6 +638,7 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
           final value = _decodeText(payload, offset, length);
           return value == 'true' || value == '1';
         case Oid.float4:
+          return FloatHandler.parseText(_decodeText(payload, offset, length));
         case Oid.float8:
           return double.parse(_decodeText(payload, offset, length));
         case Oid.date:
@@ -694,48 +720,8 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     return _notDecoded;
   }
 
-  double _readNumericDouble(Uint8List payload, int offset, int length) {
-    final end = offset + length;
-    if (offset + 8 > end) {
-      throw FormatException('Invalid numeric length: $length');
-    }
-
-    final ndigits = _readInt16(payload, offset);
-    offset += 2;
-    final weight = _readInt16(payload, offset);
-    offset += 2;
-    final sign = _readInt16(payload, offset);
-    offset += 2;
-    offset += 2; // dscale
-
-    if (sign == 0xC000) {
-      return double.nan;
-    }
-    if (ndigits == 0) {
-      return sign == 0x4000 ? -0.0 : 0.0;
-    }
-
-    var value = 0.0;
-    for (var i = 0; i < ndigits; i++) {
-      if (offset + 2 > end) {
-        throw FormatException('Invalid numeric digit length: $length');
-      }
-      value = (value * 10000) + _readInt16(payload, offset);
-      offset += 2;
-    }
-
-    var scaleGroups = ndigits - weight - 1;
-    while (scaleGroups > 0) {
-      value /= 10000;
-      scaleGroups--;
-    }
-    while (scaleGroups < 0) {
-      value *= 10000;
-      scaleGroups++;
-    }
-
-    return sign == 0x4000 ? -value : value;
-  }
+  double _readNumericDouble(Uint8List payload, int offset, int length) =>
+      NumericDoubleHandler.decodeBinary(payload, offset, length);
 
   String _decodeText(Uint8List payload, int offset, int length) {
     if (identical(_connector.encoding, utf8)) {
@@ -804,7 +790,16 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
 
   Future<List<List<Object?>>> readAllRows() async {
     final rows = <List<Object?>>[];
-    if (_closed || _currentResultFinished) {
+    if (_drained) {
+      return rows;
+    }
+    // A command without rows (DDL, SET, DO, ...) stops init() at its
+    // CommandComplete: keep reading up to ReadyForQuery. Returning there left
+    // ReadyForQuery unread, so the next command returned this one's (empty)
+    // result and every later command the previous command's result; the rows
+    // of a later statement (`create ...; select ...`) are returned, like the
+    // rows of every statement when the first one has rows.
+    if (_currentResultFinished && !_closed) {
       return rows;
     }
 
@@ -820,7 +815,11 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
       }
 
       if (msg is DataRowMessage) {
-        rows.add(_decodeRowValues(msg));
+        try {
+          rows.add(_decodeRowValues(msg));
+        } catch (error, stackTrace) {
+          await _drainAndRethrow(error, stackTrace);
+        }
         continue;
       }
 
@@ -858,6 +857,31 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     }
   }
 
+  /// The rows of the current result as [PgRow] views (binary results).
+  Future<List<PgRow>> readAllPgRows() async {
+    final rows = <PgRow>[];
+    List<String>? names;
+    List<int>? oids;
+    RowDescriptionMessage? description;
+    while (await read()) {
+      final row = _currentRow!;
+      if (!identical(description, _rowDescription)) {
+        description = _rowDescription!;
+        names = [for (final field in description.fields) field.name];
+        oids = [for (final field in description.fields) field.oid];
+      }
+      rows.add(PgRow(
+        buffer: Uint8List.fromList(row.payload),
+        columnOffsets: Int32List.fromList(row.columnOffsets),
+        columnLengths: Int32List.fromList(row.columnLengths),
+        columnNames: names!,
+        columnTypes: oids!,
+        timeZone: _connector.timeZone,
+      ));
+    }
+    return rows;
+  }
+
   List<Object?> _decodeRowValues(DataRowMessage row) {
     final values = List<Object?>.filled(row.columnCount, null);
     for (var i = 0; i < row.columnCount; i++) {
@@ -870,7 +894,16 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
   @override
   Future<List<Map<String, dynamic>>> readAllMaps() async {
     final rows = <Map<String, dynamic>>[];
-    if (_closed || _currentResultFinished) {
+    if (_drained) {
+      return rows;
+    }
+    // A command without rows (DDL, SET, DO, ...) stops init() at its
+    // CommandComplete: keep reading up to ReadyForQuery. Returning there left
+    // ReadyForQuery unread, so the next command returned this one's (empty)
+    // result and every later command the previous command's result; the rows
+    // of a later statement (`create ...; select ...`) are returned, like the
+    // rows of every statement when the first one has rows.
+    if (_currentResultFinished && !_closed) {
       return rows;
     }
 
@@ -886,7 +919,11 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
       }
 
       if (msg is DataRowMessage) {
-        rows.add(_decodeRowMap(msg));
+        try {
+          rows.add(_decodeRowMap(msg));
+        } catch (error, stackTrace) {
+          await _drainAndRethrow(error, stackTrace);
+        }
         continue;
       }
 
@@ -964,8 +1001,10 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     }
 
     final colData = Uint8List.sublistView(payload, offset, offset + length);
-    return handler?.read(colData, isText: isText) ??
-        (isText ? utf8.decode(colData) : colData);
+    // A handler may decode to null (a JSON `null`): it came back as the raw
+    // bytes.
+    if (handler != null) return handler.read(colData, isText: isText);
+    return isText ? utf8.decode(colData) : colData;
   }
 
   @override
