@@ -42,8 +42,10 @@ class SocketBinaryInput implements BinaryInput {
     Stream<List<int>> stream, {
     int initialCapacity = 4096,
     void Function()? onClosed,
+    void Function()? onData,
   })  : _buffer = Uint8ListPool.rent(initialCapacity),
-        _onClosed = onClosed {
+        _onClosed = onClosed,
+        _onDataArrived = onData {
     stream.listen(
       _onData,
       onDone: _onDone,
@@ -64,6 +66,9 @@ class SocketBinaryInput implements BinaryInput {
   Completer<void>? _waitCompleter;
   final void Function()? _onClosed;
 
+  /// Called after bytes arrive (used to read async messages while idle).
+  final void Function()? _onDataArrived;
+
   int get _available => _writeLength - _readOffset;
 
   @override
@@ -73,6 +78,7 @@ class SocketBinaryInput implements BinaryInput {
     _appendData(data);
     _waitCompleter?..complete();
     _waitCompleter = null;
+    _onDataArrived?.call();
   }
 
   void _onDone() {

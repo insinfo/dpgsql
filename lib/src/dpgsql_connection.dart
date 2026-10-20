@@ -83,6 +83,11 @@ class DpgsqlConnection {
   Stream<ErrorOrNoticeMessage> get notices => _noticeController.stream;
   final _noticeController = StreamController<ErrorOrNoticeMessage>.broadcast();
 
+  /// Emits when the server closes an open connection (terminated backend,
+  /// restart, network failure detected by the socket).
+  Stream<void> get onConnectionLost => _connectionLostController.stream;
+  final _connectionLostController = StreamController<void>.broadcast();
+
   /// Opens a database connection with the property settings specified by the ConnectionString.
   Future<void> open() async {
     if (_state != ConnectionState.closed) {
@@ -122,6 +127,15 @@ class DpgsqlConnection {
       _connector!.notices.listen((e) {
         _noticeController.add(e);
       });
+      final connector = _connector!;
+      // Notifications arrive between commands too (LISTEN): read them when
+      // the connection is idle instead of waiting for the next command.
+      connector.onDataArrived = _scheduleIdleDrain;
+      connector.onConnectionLost = () {
+        if (identical(_connector, connector)) {
+          _connectionLostController.add(null);
+        }
+      };
 
       await _connector!.open();
       _state = ConnectionState.open;
@@ -234,12 +248,14 @@ class DpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    final reader = await _connector!.executeReader(commandText,
-        parameters: parameters,
-        statementName: statementName,
-        rewriteParameters: rewriteParameters,
-        resultMode: resultMode);
-    return _trackReader(reader);
+    return _exclusive(() async {
+      final reader = await _connector!.executeReader(commandText,
+          parameters: parameters,
+          statementName: statementName,
+          rewriteParameters: rewriteParameters,
+          resultMode: resultMode);
+      return _trackReader(reader);
+    });
   }
 
   Future<List<List<Object?>>> executeRows(
@@ -251,12 +267,12 @@ class DpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.executeRows(
+    return _exclusive(() => _connector!.executeRows(
       commandText,
       parameters: parameters,
       statementName: statementName,
       rewriteParameters: rewriteParameters,
-    );
+    ));
   }
 
   Future<Object?> executeScalar(
@@ -268,12 +284,12 @@ class DpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.executeScalar(
+    return _exclusive(() => _connector!.executeScalar(
       commandText,
       parameters: parameters,
       statementName: statementName,
       rewriteParameters: rewriteParameters,
-    );
+    ));
   }
 
   Future<List<Map<String, dynamic>>> executeMaps(
@@ -286,13 +302,13 @@ class DpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.executeMaps(
+    return _exclusive(() => _connector!.executeMaps(
       commandText,
       parameters: parameters,
       statementName: statementName,
       rewriteParameters: rewriteParameters,
       resultMode: resultMode,
-    );
+    ));
   }
 
   Future<List<PgRow>> executePgRows(
@@ -304,12 +320,12 @@ class DpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.executePgRows(
+    return _exclusive(() => _connector!.executePgRows(
       commandText,
       parameters: parameters,
       statementName: statementName,
       rewriteParameters: rewriteParameters,
-    );
+    ));
   }
 
   Future<void> forEachPgRow(
@@ -322,13 +338,13 @@ class DpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.forEachPgRow(
+    return _exclusive(() => _connector!.forEachPgRow(
       commandText,
       action,
       parameters: parameters,
       statementName: statementName,
       rewriteParameters: rewriteParameters,
-    );
+    ));
   }
 
   Future<void> forEachPgRowSync(
@@ -341,13 +357,13 @@ class DpgsqlConnection {
     if (_connector == null) {
       throw StateError('Connection closed');
     }
-    return _connector!.forEachPgRowSync(
+    return _exclusive(() => _connector!.forEachPgRowSync(
       commandText,
       action,
       parameters: parameters,
       statementName: statementName,
       rewriteParameters: rewriteParameters,
-    );
+    ));
   }
 
   Future<void> prepare(String commandText, String statementName,
@@ -379,12 +395,14 @@ class DpgsqlConnection {
     // IF commandText contains '?', we fail? Or we assume it's raw?
     // Let's leave it as raw. The User should use DpgsqlCommand for smart parameter handling.
 
-    await _connector!.prepare(commandText, statementName, parameters);
+    await _exclusive(
+        () => _connector!.prepare(commandText, statementName, parameters));
   }
 
   /// Starts a binary COPY FROM STDIN operation.
   Future<DpgsqlBinaryImporter> beginBinaryImport(String copyFromCommand) async {
     if (_connector == null) throw StateError('Connection closed');
+    _checkIdle();
     _activeCopyOperation = true;
     try {
       final importer = DpgsqlBinaryImporter(
@@ -404,6 +422,7 @@ class DpgsqlConnection {
   /// Starts a binary COPY TO STDOUT operation.
   Future<DpgsqlBinaryExporter> beginBinaryExport(String copyToCommand) async {
     if (_connector == null) throw StateError('Connection closed');
+    _checkIdle();
     _activeCopyOperation = true;
     try {
       final exporter = DpgsqlBinaryExporter(
@@ -430,6 +449,7 @@ class DpgsqlConnection {
     DpgsqlCopyProgressCallback? onProgress,
   }) async {
     if (_connector == null) throw StateError('Connection closed');
+    _checkIdle();
     _activeCopyOperation = true;
     try {
       final stream = DpgsqlRawCopyStream(
@@ -471,9 +491,10 @@ class DpgsqlConnection {
     if (_state != ConnectionState.open) {
       throw StateError('Connection is not open');
     }
-    // We need to implement executeBatch in DpgsqlConnector
-    final reader = await _connector!.executeBatch(batch);
-    return _trackReader(reader);
+    return _exclusive(() async {
+      final reader = await _connector!.executeBatch(batch);
+      return _trackReader(reader);
+    });
   }
 
   // Pipeline Mode API
@@ -688,17 +709,71 @@ class DpgsqlConnection {
     return _trackReader(reader);
   }
 
+  /// A command is being sent or its response read on this connection.
+  bool _commandInProgress = false;
+
+  /// Throws when another command still owns the connection (sending, reading,
+  /// an open reader or a COPY). PostgreSQL runs one command at a time per
+  /// connection; a second one used to interleave with the first and both read
+  /// each other's responses (wrong results or a crashed read loop).
+  void _checkIdle() {
+    if (_commandInProgress || hasActiveReader || _activeCopyOperation) {
+      throw StateError(
+          'DpgsqlConnection: another command is still running on this '
+          'connection. A connection runs one command at a time: await the '
+          'previous command (and close its reader) or use a DpgsqlDataSource '
+          'pool for concurrent work.');
+    }
+  }
+
+  /// Runs [operation] as the only command on this connection. Pipeline mode
+  /// queues commands by design and is not restricted.
+  Future<T> _exclusive<T>(Future<T> Function() operation) async {
+    if (_connector?.inPipelineMode ?? false) return operation();
+    _checkIdle();
+    _commandInProgress = true;
+    try {
+      return await operation();
+    } finally {
+      _commandInProgress = false;
+      _scheduleIdleDrain();
+    }
+  }
+
+  bool _idleDrainScheduled = false;
+
+  /// Delivers notifications received while no command owns the connection.
+  void _scheduleIdleDrain() {
+    if (_idleDrainScheduled) return;
+    _idleDrainScheduled = true;
+    scheduleMicrotask(() {
+      _idleDrainScheduled = false;
+      final connector = _connector;
+      if (connector == null ||
+          _state != ConnectionState.open ||
+          _commandInProgress ||
+          hasActiveReader ||
+          _activeCopyOperation ||
+          connector.inPipelineMode) {
+        return;
+      }
+      connector.drainAsyncMessages();
+    });
+  }
+
   DpgsqlDataReader _trackReader(DpgsqlDataReader reader) {
     _activeReaderCount++;
     return _TrackedDpgsqlDataReader(reader, () {
       if (_activeReaderCount > 0) {
         _activeReaderCount--;
       }
+      _scheduleIdleDrain();
     });
   }
 
   void _handleCopyOperationClosed(bool reusable) {
     _activeCopyOperation = false;
+    _scheduleIdleDrain();
     if (!reusable) {
       _discardConnectorOnClose = true;
     }

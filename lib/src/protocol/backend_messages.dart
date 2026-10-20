@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import '../io/binary_input.dart';
@@ -365,14 +366,26 @@ class BackendMessageReader {
 int messageRemaining(MemoryBinaryInput input) =>
     input.remaining; // bytes restantes no payload.
 
+/// A null-terminated protocol string (column names, error fields, notification
+/// payloads, parameter values). The server sends them in client_encoding
+/// (UTF8 by default); they used to be decoded as Latin-1, so non-ASCII text
+/// came out garbled ("olÃ¡"). Bytes that are not valid UTF-8 (a Latin-1
+/// client_encoding) keep the Latin-1 decoding.
 String _readCString(MemoryBinaryInput input) {
   final bytes = <int>[];
+  var ascii = true;
   while (true) {
     final b = input.readUint8();
     if (b == 0) break;
+    if (b >= 0x80) ascii = false;
     bytes.add(b);
   }
-  return String.fromCharCodes(bytes);
+  if (ascii) return String.fromCharCodes(bytes);
+  try {
+    return utf8.decode(bytes);
+  } on FormatException {
+    return String.fromCharCodes(bytes);
+  }
 }
 
 sealed class AuthenticationRequestMessage implements IBackendMessage {

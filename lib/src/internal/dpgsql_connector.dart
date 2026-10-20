@@ -100,6 +100,13 @@ class DpgsqlConnector {
 
   bool _isConnected = false;
   bool get isConnected => _isConnected;
+
+  /// Called when bytes arrive from the server (set by DpgsqlConnection to
+  /// deliver notifications while no command is running).
+  void Function()? onDataArrived;
+
+  /// Called when the server closes the socket while connected.
+  void Function()? onConnectionLost;
   Map<String, String> _serverParameters = {};
   int _backendProcessId = 0;
   int _backendSecretKey = 0;
@@ -120,11 +127,71 @@ class DpgsqlConnector {
       return _typeRegistry.resolveByDpgsqlDbType(dbType);
     }
 
-    if (inferStringParametersAsUnknown && value is String) {
+    if (inferStringParametersAsUnknown &&
+        (value is String || _isStringList(value))) {
+      // Sent as `unknown` text (a `{...}` array literal for lists), so the
+      // server infers uuid, inet, date, varchar[] ... from the context, e.g.
+      // `uuid_col = any(?)`. A typed text[] made that fail with
+      // "operator does not exist: uuid = text".
       return null;
     }
 
     return _typeRegistry.resolveByValue(value);
+  }
+
+  /// A non-empty list holding only strings and nulls (nested lists allowed).
+  static bool _isStringList(Object value) {
+    if (value is! List || value.isEmpty) return false;
+    var sawString = false;
+    bool check(List items) {
+      for (final item in items) {
+        if (item == null) continue;
+        if (item is String) {
+          sawString = true;
+        } else if (item is List) {
+          if (!check(item)) return false;
+        } else {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    return check(value) && sawString;
+  }
+
+  /// Text form of a parameter sent without a type handler (OID 0).
+  static String _textParameter(Object value) {
+    // Maps (and lists of maps) are JSON; `toString()` produced `{a: 1}`,
+    // which json/jsonb reject.
+    if (value is Map ||
+        (value is List && value.isNotEmpty && value.every((e) => e is Map))) {
+      return json.encode(value);
+    }
+    if (value is List) return _arrayLiteral(value);
+    return value.toString();
+  }
+
+  /// PostgreSQL array literal: `{"a","b\"c",NULL,{"x"}}`.
+  static String _arrayLiteral(List items) {
+    final buffer = StringBuffer('{');
+    for (var i = 0; i < items.length; i++) {
+      if (i > 0) buffer.write(',');
+      final item = items[i];
+      if (item == null) {
+        buffer.write('NULL');
+      } else if (item is List) {
+        buffer.write(_arrayLiteral(item));
+      } else {
+        final text = item.toString().replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+        buffer
+          ..write('"')
+          ..write(text)
+          ..write('"');
+      }
+    }
+    buffer.write('}');
+    return buffer.toString();
   }
 
   int _parameterOid(TypeHandler? handler) => handler?.oid ?? 0;
@@ -148,7 +215,7 @@ class DpgsqlConnector {
       return;
     }
 
-    values.add(Uint8List.fromList(encoding.encode(value.toString())));
+    values.add(Uint8List.fromList(encoding.encode(_textParameter(value))));
     formatCodes.add(0);
   }
 
@@ -257,8 +324,11 @@ class DpgsqlConnector {
       _readBuffer = SocketBinaryInput(
         inputStream,
         onClosed: () {
+          final wasConnected = _isConnected;
           _isConnected = false;
+          if (wasConnected) onConnectionLost?.call();
         },
+        onData: () => onDataArrived?.call(),
       );
       _writeBuffer = SocketBinaryOutput(_socket!);
 
@@ -283,14 +353,25 @@ class DpgsqlConnector {
   }
 
   Future<void> close() async {
-    if (_socket != null) {
-      try {
-        await _frontendMessages?.writeTerminate();
-      } catch (_) {
-        // Ignore errors during termination
-      }
-      await _socket!.close();
+    final socket = _socket;
+    if (socket != null) {
       _socket = null;
+      // Errors of a socket being closed are irrelevant (they used to surface
+      // as uncaught errors after the server had closed the connection).
+      socket.done.catchError((_) => socket);
+      if (_isConnected) {
+        try {
+          await _frontendMessages?.writeTerminate();
+        } catch (_) {
+          // Ignore errors during termination
+        }
+        try {
+          await socket.close();
+        } catch (_) {}
+      } else {
+        // The server already closed it: writing Terminate would fail.
+        socket.destroy();
+      }
     }
     _readBuffer?.dispose();
     _readBuffer = null;
@@ -474,6 +555,44 @@ class DpgsqlConnector {
     }
   }
 
+  /// Delivers the notifications, notices and parameter changes already
+  /// received while no command is running. Synchronous: only complete
+  /// messages in the buffer are read; any other message is kept for the next
+  /// reader.
+  void drainAsyncMessages() {
+    if (!_isConnected || _msgReader == null || inPipelineMode) return;
+    while (_bufferedBackendMessages.isNotEmpty) {
+      if (!_dispatchAsyncMessage(_bufferedBackendMessages.first)) return;
+      _bufferedBackendMessages.removeFirst();
+    }
+    while (true) {
+      final raw = _msgReader!.tryReadMessage();
+      if (raw == null) return;
+      final msg = _backendReader.parse(raw);
+      if (!_dispatchAsyncMessage(msg)) {
+        _bufferedBackendMessages.add(msg);
+        return;
+      }
+    }
+  }
+
+  bool _dispatchAsyncMessage(IBackendMessage msg) {
+    if (msg is NotificationResponseMessage) {
+      _notificationController.add(DpgsqlNotificationEventArgs(
+          msg.channel, msg.payload, msg.processId));
+      return true;
+    }
+    if (msg is NoticeResponseMessage) {
+      _noticeController.add(msg.notice);
+      return true;
+    }
+    if (msg is ParameterStatusMessage) {
+      _serverParameters[msg.parameter] = msg.value;
+      return true;
+    }
+    return false;
+  }
+
   int _parseRecordsAffected(String commandTag) {
     if (commandTag.isEmpty) return 0;
     final parts = commandTag.split(' ');
@@ -500,6 +619,29 @@ class DpgsqlConnector {
         msg is PortalSuspendedMessage ||
         msg is CloseCompletedMessage ||
         msg is EmptyQueryMessage);
+  }
+
+  /// Throws the error in [msg]. Outside pipeline mode the rest of the
+  /// response is consumed first: PostgreSQL ends an errored simple query or
+  /// Sync with ReadyForQuery, and leaving it unread made the next command
+  /// finish on it, so every later command returned the previous one's result.
+  Future<Never> _throwAfterReadyForQuery(ErrorResponseMessage msg) async {
+    final err = msg.error;
+    final exception = PostgresException(
+      severity: err.severity ?? 'ERROR',
+      invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
+      sqlState: err.sqlState ?? '00000',
+      messageText: err.messageText ?? 'Unknown Error',
+      detail: err.detail,
+      hint: err.hint,
+    );
+    if (!inPipelineMode) {
+      while (true) {
+        final next = await _readMessage();
+        if (next is ReadyForQueryMessage) break;
+      }
+    }
+    throw exception;
   }
 
   Future<IBackendMessage> _readMessage() {
@@ -691,12 +833,7 @@ class DpgsqlConnector {
       if (msg is NoDataMessage) continue;
       if (msg is ReadyForQueryMessage) break;
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-            severity: err.severity ?? 'ERROR',
-            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-            sqlState: err.sqlState ?? '00000',
-            messageText: err.messageText ?? 'Unknown Error');
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }
@@ -1234,15 +1371,7 @@ class DpgsqlConnector {
         return rows;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-          severity: err.severity ?? 'ERROR',
-          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-          sqlState: err.sqlState ?? '00000',
-          messageText: err.messageText ?? 'Unknown Error',
-          detail: err.detail,
-          hint: err.hint,
-        );
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }
@@ -1325,16 +1454,7 @@ class DpgsqlConnector {
             return rows;
           }
           if (msg is ErrorResponseMessage) {
-            final err = msg.error;
-            throw PostgresException(
-              severity: err.severity ?? 'ERROR',
-              invariantSeverity:
-                  err.invariantSeverity ?? err.severity ?? 'ERROR',
-              sqlState: err.sqlState ?? '00000',
-              messageText: err.messageText ?? 'Unknown Error',
-              detail: err.detail,
-              hint: err.hint,
-            );
+            await _throwAfterReadyForQuery(msg);
           }
       }
     }
@@ -1385,15 +1505,7 @@ class DpgsqlConnector {
         return rows;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-          severity: err.severity ?? 'ERROR',
-          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-          sqlState: err.sqlState ?? '00000',
-          messageText: err.messageText ?? 'Unknown Error',
-          detail: err.detail,
-          hint: err.hint,
-        );
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }
@@ -1487,15 +1599,7 @@ class DpgsqlConnector {
         return rows;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-          severity: err.severity ?? 'ERROR',
-          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-          sqlState: err.sqlState ?? '00000',
-          messageText: err.messageText ?? 'Unknown Error',
-          detail: err.detail,
-          hint: err.hint,
-        );
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }
@@ -1564,15 +1668,7 @@ class DpgsqlConnector {
         return;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-          severity: err.severity ?? 'ERROR',
-          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-          sqlState: err.sqlState ?? '00000',
-          messageText: err.messageText ?? 'Unknown Error',
-          detail: err.detail,
-          hint: err.hint,
-        );
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }
@@ -1638,15 +1734,7 @@ class DpgsqlConnector {
         return;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-          severity: err.severity ?? 'ERROR',
-          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-          sqlState: err.sqlState ?? '00000',
-          messageText: err.messageText ?? 'Unknown Error',
-          detail: err.detail,
-          hint: err.hint,
-        );
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }
@@ -1703,15 +1791,7 @@ class DpgsqlConnector {
         return rows;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-          severity: err.severity ?? 'ERROR',
-          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-          sqlState: err.sqlState ?? '00000',
-          messageText: err.messageText ?? 'Unknown Error',
-          detail: err.detail,
-          hint: err.hint,
-        );
+        await _throwAfterReadyForQuery(msg);
       }
       if (msg is RowDescriptionMessage) {
         continue;
@@ -1774,15 +1854,7 @@ class DpgsqlConnector {
         return scalar;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-          severity: err.severity ?? 'ERROR',
-          invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-          sqlState: err.sqlState ?? '00000',
-          messageText: err.messageText ?? 'Unknown Error',
-          detail: err.detail,
-          hint: err.hint,
-        );
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }
@@ -2083,12 +2155,7 @@ class DpgsqlConnector {
     while (true) {
       final msg = await _readMessage();
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-            severity: err.severity ?? 'ERROR',
-            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-            sqlState: err.sqlState ?? '00000',
-            messageText: err.messageText ?? 'Unknown Error');
+        await _throwAfterReadyForQuery(msg);
       }
 
       if (msg is CopyResponseMessage) {
@@ -2136,12 +2203,7 @@ class DpgsqlConnector {
         return null; // End of copy
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-            severity: err.severity ?? 'ERROR',
-            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-            sqlState: err.sqlState ?? '00000',
-            messageText: err.messageText ?? 'Unknown Error');
+        await _throwAfterReadyForQuery(msg);
       }
       // Ignore notices
     }
@@ -2162,12 +2224,7 @@ class DpgsqlConnector {
         return;
       }
       if (msg is ErrorResponseMessage) {
-        final err = msg.error;
-        throw PostgresException(
-            severity: err.severity ?? 'ERROR',
-            invariantSeverity: err.invariantSeverity ?? err.severity ?? 'ERROR',
-            sqlState: err.sqlState ?? '00000',
-            messageText: err.messageText ?? 'Unknown Error');
+        await _throwAfterReadyForQuery(msg);
       }
     }
   }

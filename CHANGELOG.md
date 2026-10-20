@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.0.3
+
+- Fixed results shifting after an error raised while a response was being
+  read (a cancelled statement, or a failure after `RowDescription`): the
+  `ReadyForQuery` that ends the response was left unread, so the next command
+  returned `[]` and every later command the previous command's result. All
+  reader and fast paths (`executeMaps`, `executeRows`, `executeScalar`,
+  prepared statements, `prepare`, COPY) now consume the response before
+  throwing; errors also carry `detail` and `hint` on every path.
+- `Map` parameters (and lists of maps) are sent as JSON. They were sent with
+  `toString()` (`{a: 1}`), which `json`/`jsonb` reject.
+- With `Infer String Parameters As Unknown` (the default), lists of strings
+  are sent as untyped array literals, like single strings, so the server
+  infers the element type: `uuid_col = any(?)` no longer fails with
+  `operator does not exist: uuid = text`.
+- A second command on a connection that is still running one (sending,
+  reading, an open reader or a COPY) now fails immediately with a clear
+  `StateError`. It used to interleave with the first: both read each other's
+  responses, returning wrong rows or crashing the read loop with
+  "Buffer interno menor que o esperado". Pipeline mode is unchanged.
+- `LISTEN` notifications are delivered while the connection is idle. They
+  were read only when the next command ran on the listening connection.
+- Protocol strings (column names, error and notice fields, notification
+  payloads, parameter values) are decoded as UTF-8. They were decoded as
+  Latin-1, so `"situação"` or a Portuguese error message came out garbled.
+- `DpgsqlConnection.onConnectionLost` emits when the server closes an open
+  connection; `close()` after that no longer writes `Terminate` to the closed
+  socket (it raised an uncaught error).
+
 ## 1.0.2
 
 - Fixed decoding of the system-catalog string types `name` (OID 19) and the

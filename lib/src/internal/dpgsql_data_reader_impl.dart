@@ -126,6 +126,18 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
     }
   }
 
+  /// Throws the error in [msg]. Outside a pipeline the rest of the response
+  /// (up to ReadyForQuery) is consumed first, so the next command does not
+  /// read this one's leftovers (an error after RowDescription, e.g. a
+  /// cancelled statement, used to leave ReadyForQuery unread).
+  Future<Never> _failAndDrain(ErrorResponseMessage msg) async {
+    final exception = _createExceptionForError(msg);
+    if (!_isPipelineReader) {
+      await _drainUntilReadyForQuery();
+    }
+    throw exception;
+  }
+
   Never _handleError(ErrorResponseMessage msg) {
     throw _createExceptionForError(msg);
   }
@@ -841,7 +853,7 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
       }
 
       if (msg is ErrorResponseMessage) {
-        _handleError(msg);
+        await _failAndDrain(msg);
       }
     }
   }
@@ -907,7 +919,7 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
       }
 
       if (msg is ErrorResponseMessage) {
-        _handleError(msg);
+        await _failAndDrain(msg);
       }
     }
   }
@@ -1027,7 +1039,7 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
       }
 
       if (msg is ErrorResponseMessage) {
-        _handleError(msg);
+        await _failAndDrain(msg);
       }
 
       // Ignore BindComplete, ParseComplete, etc.
@@ -1095,7 +1107,7 @@ class DpgsqlDataReaderImpl implements DpgsqlDataReader {
       }
 
       if (msg is ErrorResponseMessage) {
-        _handleError(msg);
+        await _failAndDrain(msg);
       }
     }
   }
