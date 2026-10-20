@@ -25,6 +25,10 @@
 - Protocol strings (column names, error and notice fields, notification
   payloads, parameter values) are decoded as UTF-8. They were decoded as
   Latin-1, so `"situação"` or a Portuguese error message came out garbled.
+- `@name` and `?` placeholders are no longer read inside comments (`--`,
+  nested `/* */`), dollar-quoted strings (`$$...$$`, `$tag$...$tag$`) or the
+  backslash escapes of `E'...'` strings. An apostrophe in a comment opened a
+  string and shifted every placeholder after it (syntax error).
 - `DpgsqlConnection.onConnectionLost` emits when the server closes an open
   connection; `close()` after that no longer writes `Terminate` to the closed
   socket (it raised an uncaught error).
