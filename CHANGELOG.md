@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.1.0
+
+- `DpgsqlCommand.simpleQuery`: the command goes through the simple query
+  protocol (libpq's `PQexec`) even with `Use Extended Query For
+  Unparameterized Commands=true`, so a script with several statements
+  (`create ...; insert ...; begin; ...; commit;`) runs in one round trip;
+  with the extended protocol PostgreSQL refuses it (42601). It takes no
+  parameters and cannot be prepared or pipelined (`StateError`); only
+  `executeReader` and `executeNonQuery` use it (the other `execute*`
+  methods throw instead of ignoring it). `DpgsqlConnection.executeReader`
+  takes `simpleQuery:` too.
+
 ## 1.0.3
 
 - Performance, `DpgsqlDataSource`: the pool settings are read once, when the

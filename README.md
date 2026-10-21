@@ -121,6 +121,29 @@ final reader = await command.executeReader();
 await reader.close();
 ```
 
+## Scripts (Simple Query Protocol)
+
+A command without parameters goes through the simple query protocol by
+default, so a text with several statements runs in one round trip. With
+`Use Extended Query For Unparameterized Commands=true` (binary results and
+auto-prepare for every command), set `simpleQuery` on the commands that run
+a script, as libpq's `PQexec` (PHP's `PDO::exec`) does:
+
+```dart
+final command = DpgsqlCommand('''
+  create table t (id int);
+  insert into t values (1), (2);
+  begin; update t set id = id + 1; commit;
+''', connection)
+  ..simpleQuery = true;
+final affected = await command.executeNonQuery(); // 4
+```
+
+The simple protocol takes no parameters and returns text results; only
+`executeReader` and `executeNonQuery` use it. The statements run as one
+implicit transaction unless the text has its own `BEGIN`/`COMMIT`, so
+`CREATE INDEX CONCURRENTLY` and `VACUUM` must be alone in the text.
+
 ## Batch And Pipeline
 
 ```dart

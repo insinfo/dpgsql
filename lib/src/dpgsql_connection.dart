@@ -349,20 +349,31 @@ class DpgsqlConnection {
     }
   }
 
+  /// [simpleQuery]: send [commandText] through the simple query protocol,
+  /// even with `Use Extended Query For Unparameterized Commands` (see
+  /// DpgsqlCommand.simpleQuery); it takes no parameters.
   Future<DpgsqlDataReader> executeReader(String commandText,
       {DpgsqlParameterCollection? parameters,
       String? statementName,
       bool rewriteParameters = true,
-      PgResultMode resultMode = PgResultMode.typed}) async {
+      PgResultMode resultMode = PgResultMode.typed,
+      bool simpleQuery = false}) async {
     if (_connector == null) {
       throw StateError('Connection closed');
+    }
+    if (simpleQuery &&
+        ((parameters != null && parameters.isNotEmpty) ||
+            statementName != null)) {
+      throw ArgumentError('The simple query protocol takes no parameters '
+          'and no prepared statement.');
     }
     return _exclusive(() async {
       final reader = await _connector!.executeReader(commandText,
           parameters: parameters,
           statementName: statementName,
           rewriteParameters: rewriteParameters,
-          resultMode: resultMode);
+          resultMode: resultMode,
+          simpleQuery: simpleQuery);
       return _trackReader(reader, holdsTurn: true);
     });
   }

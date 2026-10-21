@@ -18,6 +18,26 @@ class DpgsqlCommand {
   DpgsqlTransaction? transaction;
   final DpgsqlParameterCollection parameters = DpgsqlParameterCollection();
 
+  /// Sends [commandText] through PostgreSQL's simple query protocol, as
+  /// libpq's `PQexec` (PHP's `PDO::exec`) does, even when the connection
+  /// uses the extended protocol for commands without parameters (`Use
+  /// Extended Query For Unparameterized Commands=true`). Several statements
+  /// separated by `;` then run in one round trip, like a script: a DDL file,
+  /// a `BEGIN; ...; COMMIT;` block.
+  ///
+  /// The simple protocol takes no parameters, cannot be prepared or
+  /// pipelined and returns text results; only [executeReader] and
+  /// [executeNonQuery] use it (the other `execute*` methods throw). The
+  /// statements of one message run as one implicit transaction unless the
+  /// text has its own `BEGIN`/`COMMIT`, so `CREATE INDEX CONCURRENTLY` and
+  /// `VACUUM` must be alone in the text.
+  ///
+  /// ```dart
+  /// final command = DpgsqlCommand(script, connection)..simpleQuery = true;
+  /// await command.executeNonQuery();
+  /// ```
+  bool simpleQuery = false;
+
   bool _isPrepared = false;
   String _statementName = '';
 
@@ -80,6 +100,18 @@ class DpgsqlCommand {
       throw StateError('Connection must be open');
     }
 
+    if (simpleQuery) {
+      if (parameters.isNotEmpty || _isPrepared) {
+        throw StateError('simpleQuery: the simple query protocol takes no '
+            'parameters and cannot run a prepared statement.');
+      }
+      if (connection!.inPipelineMode) {
+        throw StateError('simpleQuery cannot be used in pipeline mode.');
+      }
+      return connection!.executeReader(commandText,
+          resultMode: resultMode, simpleQuery: true);
+    }
+
     if (_canExecuteDirectlyWithoutPlan) {
       if (connection!.inPipelineMode) {
         final pending = await connection!.executeQueryPipelined(
@@ -113,6 +145,14 @@ class DpgsqlCommand {
     );
   }
 
+  /// [simpleQuery] runs only through [executeReader] and [executeNonQuery].
+  void _rejectSimpleQuery(String method) {
+    if (simpleQuery) {
+      throw StateError('$method does not use the simple query protocol; '
+          'use executeReader or executeNonQuery with simpleQuery.');
+    }
+  }
+
   Future<List<List<Object?>>> executeRows() async {
     if (connection == null || connection!.state != ConnectionState.open) {
       throw StateError('Connection must be open');
@@ -120,6 +160,7 @@ class DpgsqlCommand {
     if (connection!.inPipelineMode) {
       throw StateError('executeRows cannot be used while in pipeline mode');
     }
+    _rejectSimpleQuery('executeRows');
 
     if (_canExecuteDirectlyWithoutPlan) {
       return connection!.executeRows(commandText);
@@ -141,6 +182,7 @@ class DpgsqlCommand {
     if (connection!.inPipelineMode) {
       throw StateError('executeScalar cannot be used while in pipeline mode');
     }
+    _rejectSimpleQuery('executeScalar');
 
     if (_canExecuteDirectlyWithoutPlan) {
       return connection!.executeScalar(commandText);
@@ -164,6 +206,7 @@ class DpgsqlCommand {
     if (connection!.inPipelineMode) {
       throw StateError('executeMaps cannot be used while in pipeline mode');
     }
+    _rejectSimpleQuery('executeMaps');
 
     if (_canExecuteDirectlyWithoutPlan) {
       return connection!.executeMaps(commandText, resultMode: resultMode);
@@ -186,6 +229,7 @@ class DpgsqlCommand {
     if (connection!.inPipelineMode) {
       throw StateError('executePgRows cannot be used while in pipeline mode');
     }
+    _rejectSimpleQuery('executePgRows');
 
     if (_canExecuteDirectlyWithoutPlan) {
       return connection!.executePgRows(commandText);
@@ -207,6 +251,7 @@ class DpgsqlCommand {
     if (connection!.inPipelineMode) {
       throw StateError('forEachPgRow cannot be used while in pipeline mode');
     }
+    _rejectSimpleQuery('forEachPgRow');
 
     if (_canExecuteDirectlyWithoutPlan) {
       return connection!.forEachPgRow(commandText, action);
