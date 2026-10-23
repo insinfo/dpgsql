@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+- fix: the session settings (`Search Path`, `Application Name`, `Statement
+  Timeout`, `Lock Timeout`, `Idle In Transaction Session Timeout`) ran with a
+  fixed 100 ms timeout per `SET`. On a server whose replies take longer (in
+  another region, or busy starting many backends) `DpgsqlConnection.open()`
+  failed with `TimeoutException after 0:00:00.100000`, and
+  `DpgsqlDataSource` ignored the timeout and handed out the connection with
+  the `SET` still running: the settings were missing and the caller's query
+  read the pending reply ("Buffer interno menor que o esperado"). They now
+  use the connection `Timeout` (15 s by default); the data source skips
+  only a setting the server rejects and discards the connection on any
+  other error
+- fix: the pool's health check and step-by-step reset used the same 100 ms
+  timeout, and the health check counted a timeout as healthy, returning a
+  connection with the `SELECT 1` still running to the pool; they use the
+  5 s reset timeout and a timeout discards the connection
+
 ## 1.1.0
 
 - `DpgsqlCommand.simpleQuery`: the command goes through the simple query

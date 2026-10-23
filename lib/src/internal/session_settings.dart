@@ -1,24 +1,29 @@
 import '../dpgsql_connection.dart';
 import '../dpgsql_connection_string_builder.dart';
+import '../postgres_exception.dart';
 import 'dpgsql_connector.dart';
 
-const defaultSessionSettingsTimeout = Duration(milliseconds: 100);
-
+/// Runs the session settings of [builder] on [connection], each within
+/// [timeout] (the connection's `Timeout`: they are part of opening it).
+///
+/// With [ignoreServerErrors] a setting the server rejects is skipped. Any
+/// other error is rethrown, a timeout included: the command is still running
+/// on the connection, which must not be used again.
 Future<void> applyConfiguredSessionSettings(
   DpgsqlConnection connection,
   DpgsqlConnectionStringBuilder builder, {
+  required Duration timeout,
   DpgsqlConnector? connector,
   bool restoreStartupParameters = false,
-  Duration timeout = defaultSessionSettingsTimeout,
-  bool ignoreErrors = false,
+  bool ignoreServerErrors = false,
 }) async {
   final statements = configuredSessionStatements(builder,
       connector: connector, restoreStartupParameters: restoreStartupParameters);
   for (final sql in statements) {
     try {
       await connection.createCommand(sql).executeNonQuery().timeout(timeout);
-    } catch (_) {
-      if (!ignoreErrors) {
+    } on PostgresException {
+      if (!ignoreServerErrors) {
         rethrow;
       }
     }

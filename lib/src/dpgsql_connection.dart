@@ -187,7 +187,7 @@ class DpgsqlConnection {
         this,
         builder,
         restoreStartupParameters: false,
-        timeout: defaultSessionSettingsTimeout,
+        timeout: builder.timeout,
       );
     } catch (e) {
       try {

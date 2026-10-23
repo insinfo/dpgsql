@@ -8,8 +8,6 @@ import 'dpgsql_command.dart';
 import 'dpgsql_connection.dart';
 import 'dpgsql_connection_string_builder.dart';
 
-const _poolMaintenanceTimeout = Duration(milliseconds: 100);
-
 /// The reset of a reused connection: a connection that does not answer it in
 /// time is discarded (its pending answer would be read by the next command).
 const _resetTimeout = Duration(seconds: 5);
@@ -24,8 +22,8 @@ class DpgsqlDataSource {
   DpgsqlDataSource(
     String connectionString, {
     DpgsqlConnectionCallback? onOpen,
-  }) : this._(connectionString,
-            DpgsqlConnectionStringBuilder(connectionString), onOpen);
+  }) : this._(connectionString, DpgsqlConnectionStringBuilder(connectionString),
+            onOpen);
 
   /// Creates a data source from an already configured builder, avoiding the
   /// need to serialize options to a connection string.
@@ -408,17 +406,14 @@ class DpgsqlDataSource {
     } catch (_) {}
   }
 
-  /// Health check: ping connection.
+  /// Health check: ping connection. A timeout fails it: the `SELECT 1` is
+  /// still running on the connection, which must not be reused.
   Future<bool> _healthCheck(DpgsqlConnector connector) async {
     try {
       final conn = DpgsqlConnection.fromConnector(connector, (_) {});
       final cmd = conn.createCommand('SELECT 1');
-      await cmd.executeNonQuery().timeout(_poolMaintenanceTimeout);
+      await cmd.executeNonQuery().timeout(_resetTimeout);
       return true;
-    } on TimeoutException {
-      // Some tests use mock servers that do not implement query handling.
-      // Consider the connection healthy if it is still open.
-      return connector.isConnected;
     } catch (_) {
       _totalConnectionsFailed++;
       return false;
@@ -466,32 +461,27 @@ class DpgsqlDataSource {
     }
   }
 
+  /// The reset one statement at a time. A statement the server rejects is
+  /// skipped; a timeout or a broken connection throws, and the caller
+  /// discards the connection.
   Future<void> _resetConnectionStepByStep(DpgsqlConnector connector) async {
     final conn = DpgsqlConnection.fromConnector(connector, (_) {});
 
-    try {
-      await conn
-          .createCommand('ROLLBACK')
-          .executeNonQuery()
-          .timeout(_poolMaintenanceTimeout);
-    } catch (_) {}
+    Future<void> run(String sql) async {
+      try {
+        await conn.createCommand(sql).executeNonQuery().timeout(_resetTimeout);
+      } on PostgresException {
+        // e.g. ROLLBACK outside a transaction on an old server
+      }
+    }
 
+    await run('ROLLBACK');
     if (connector.preparedStatementManager.numPrepared > 0) {
       for (final sql in const ['RESET ALL', 'CLOSE ALL', 'UNLISTEN *']) {
-        try {
-          await conn
-              .createCommand(sql)
-              .executeNonQuery()
-              .timeout(_poolMaintenanceTimeout);
-        } catch (_) {}
+        await run(sql);
       }
     } else {
-      try {
-        await conn
-            .createCommand('DISCARD ALL')
-            .executeNonQuery()
-            .timeout(_poolMaintenanceTimeout);
-      } catch (_) {}
+      await run('DISCARD ALL');
     }
 
     await _restoreSessionParameters(conn, connector);
@@ -511,8 +501,8 @@ class DpgsqlDataSource {
       _builder,
       connector: connector,
       restoreStartupParameters: restoreStartupParameters,
-      timeout: _poolMaintenanceTimeout,
-      ignoreErrors: true,
+      timeout: _builder.timeout,
+      ignoreServerErrors: true,
     );
   }
 
