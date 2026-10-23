@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.1
 
 - fix: the session settings (`Search Path`, `Application Name`, `Statement
   Timeout`, `Lock Timeout`, `Idle In Transaction Session Timeout`) ran with a
