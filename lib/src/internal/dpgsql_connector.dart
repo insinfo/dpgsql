@@ -196,7 +196,8 @@ class DpgsqlConnector {
       } else if (item is List) {
         buffer.write(_arrayLiteral(item));
       } else {
-        final text = item.toString().replaceAll(r'\', r'\\').replaceAll('"', r'\"');
+        final text =
+            item.toString().replaceAll(r'\', r'\\').replaceAll('"', r'\"');
         buffer
           ..write('"')
           ..write(text)
@@ -605,8 +606,8 @@ class DpgsqlConnector {
 
   bool _dispatchAsyncMessage(IBackendMessage msg) {
     if (msg is NotificationResponseMessage) {
-      _notificationController.add(DpgsqlNotificationEventArgs(
-          msg.channel, msg.payload, msg.processId));
+      _notificationController.add(
+          DpgsqlNotificationEventArgs(msg.channel, msg.payload, msg.processId));
       return true;
     }
     if (msg is NoticeResponseMessage) {
@@ -901,8 +902,7 @@ class DpgsqlConnector {
 
   /// Every column of [description] has a binary decoder: the prepared fast
   /// paths, which request binary results, can read it.
-  bool _binaryDecodable(RowDescriptionMessage description) => description
-      .fields
+  bool _binaryDecodable(RowDescriptionMessage description) => description.fields
       .every((field) => _typeRegistry.resolve(field.oid) != null);
 
   /// [extendedQuery]: use the extended protocol even without parameters.
@@ -1003,11 +1003,11 @@ class DpgsqlConnector {
 
       // 2. Bind. The columns are known for a statement prepared earlier, not
       // for one parsed in this round trip.
-      final description = autoPrepareStatement == null &&
-              statementNameToUse != null
-          ? _preparedRowDescriptions[statementNameToUse] ??
-              _autoPreparedColumns[statementNameToUse]
-          : null;
+      final description =
+          autoPrepareStatement == null && statementNameToUse != null
+              ? _preparedRowDescriptions[statementNameToUse] ??
+                  _autoPreparedColumns[statementNameToUse]
+              : null;
       await _frontendMessages!.writeBind(
         portalName: '',
         statementName: statementNameToUse ?? '',

@@ -48,7 +48,8 @@ void main() {
     try {
       // The division fails on the second row, after rows were already sent.
       const failing = 'select 1 / (2 - g) as v from generate_series(1, 3) g';
-      await expectLater(conn.executeMaps(failing), throwsA(isA<PostgresException>()));
+      await expectLater(
+          conn.executeMaps(failing), throwsA(isA<PostgresException>()));
       expect(await conn.executeScalar('select 7'), 7);
 
       final reader = await conn.executeReader(failing);
@@ -92,8 +93,7 @@ void main() {
     }
   });
 
-  test('string lists are inferred from the context (uuid = any(?))',
-      () async {
+  test('string lists are inferred from the context (uuid = any(?))', () async {
     final conn = await openRealConnectionOrSkip();
     if (conn == null) return;
     try {

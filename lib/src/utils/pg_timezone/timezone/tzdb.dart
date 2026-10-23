@@ -1,5 +1,3 @@
-
-
 /// TimeZone db file.
 library timezone.src.tzdb;
 
@@ -221,7 +219,7 @@ Location _deserializeLocation(Uint8List data) {
     transitionZone.add(bdata.getUint8(offset));
     offset += 1;
   }
- 
+
   return Location(name, transitionAt, transitionZone, zones);
 }
 

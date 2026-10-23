@@ -153,12 +153,11 @@ class TimeOfDayHandler extends TypeHandler<Object> {
         throw ArgumentError.value(value, 'value', 'Invalid time');
       }
       final fraction = (match.group(4) ?? '').padRight(6, '0');
-      micros = ((int.parse(match.group(1)!) * 60 +
-                      int.parse(match.group(2)!)) *
-                  60 +
-              int.parse(match.group(3) ?? '0')) *
-          1000000 +
-          int.parse(fraction.substring(0, 6));
+      micros =
+          ((int.parse(match.group(1)!) * 60 + int.parse(match.group(2)!)) * 60 +
+                      int.parse(match.group(3) ?? '0')) *
+                  1000000 +
+              int.parse(fraction.substring(0, 6));
       if (match.group(5) != null) {
         offsetSeconds = (int.parse(match.group(6)!) * 60 +
                     int.parse(match.group(7) ?? '0')) *
@@ -173,9 +172,9 @@ class TimeOfDayHandler extends TypeHandler<Object> {
     return bd.buffer.asUint8List();
   }
 
-  static final _timePattern = RegExp(
-      r'^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?'
-      r'(?:([+-])(\d{1,2})(?::?(\d{2}))?(?::(\d{2}))?)?$');
+  static final _timePattern =
+      RegExp(r'^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?'
+          r'(?:([+-])(\d{1,2})(?::?(\d{2}))?(?::(\d{2}))?)?$');
 
   static String _two(int value) => value.toString().padLeft(2, '0');
 
@@ -741,9 +740,11 @@ class ArrayHandler<E> extends TypeHandler<List<E>> {
   static List<Object?> typedElements(List<dynamic> elements) {
     final values = elements.where((e) => e != null);
     if (values.isEmpty) return List<Object?>.of(elements);
-    if (values.every((e) => e is String)) return List<String?>.of(elements.cast());
+    if (values.every((e) => e is String))
+      return List<String?>.of(elements.cast());
     if (values.every((e) => e is int)) return List<int?>.of(elements.cast());
-    if (values.every((e) => e is double)) return List<double?>.of(elements.cast());
+    if (values.every((e) => e is double))
+      return List<double?>.of(elements.cast());
     if (values.every((e) => e is bool)) return List<bool?>.of(elements.cast());
     if (values.every((e) => e is DateTime)) {
       return List<DateTime?>.of(elements.cast());
@@ -1142,8 +1143,7 @@ class TypeHandlerRegistry {
 
       if (first is Uint8List) return _oidHandlers[Oid.byteaArray];
       if (first is int) {
-        return _oidHandlers[
-            _allInt32(value) ? Oid.int4Array : Oid.int8Array];
+        return _oidHandlers[_allInt32(value) ? Oid.int4Array : Oid.int8Array];
       }
       if (first is String) return _oidHandlers[Oid.textArray];
       if (first is bool) return _oidHandlers[Oid.boolArray];

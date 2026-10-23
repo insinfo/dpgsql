@@ -21,8 +21,7 @@ void main() {
           .executeNonQuery();
 
       // They used to be read only by the next command on the listener.
-      final notification =
-          await received.timeout(const Duration(seconds: 3));
+      final notification = await received.timeout(const Duration(seconds: 3));
       expect(notification.channel, 'dpgsql_idle');
       expect(notification.payload, 'olá ç');
 
@@ -45,8 +44,8 @@ void main() {
 
       await expectLater(
           conn.executeMaps("select * from \"tabela_inexistente_ção\""),
-          throwsA(isA<PostgresException>().having(
-              (e) => e.messageText, 'messageText', contains('ção'))));
+          throwsA(isA<PostgresException>()
+              .having((e) => e.messageText, 'messageText', contains('ção'))));
     } finally {
       await conn.close();
     }

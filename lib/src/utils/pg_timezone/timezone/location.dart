@@ -1,4 +1,3 @@
-
 /// TimeZone Location Info.
 ///
 /// Most of this code were taken from the go standard library

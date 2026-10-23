@@ -388,11 +388,11 @@ class DpgsqlConnection {
       throw StateError('Connection closed');
     }
     return _exclusive(() => _connector!.executeRows(
-      commandText,
-      parameters: parameters,
-      statementName: statementName,
-      rewriteParameters: rewriteParameters,
-    ));
+          commandText,
+          parameters: parameters,
+          statementName: statementName,
+          rewriteParameters: rewriteParameters,
+        ));
   }
 
   Future<Object?> executeScalar(
@@ -405,11 +405,11 @@ class DpgsqlConnection {
       throw StateError('Connection closed');
     }
     return _exclusive(() => _connector!.executeScalar(
-      commandText,
-      parameters: parameters,
-      statementName: statementName,
-      rewriteParameters: rewriteParameters,
-    ));
+          commandText,
+          parameters: parameters,
+          statementName: statementName,
+          rewriteParameters: rewriteParameters,
+        ));
   }
 
   Future<List<Map<String, dynamic>>> executeMaps(
@@ -423,12 +423,12 @@ class DpgsqlConnection {
       throw StateError('Connection closed');
     }
     return _exclusive(() => _connector!.executeMaps(
-      commandText,
-      parameters: parameters,
-      statementName: statementName,
-      rewriteParameters: rewriteParameters,
-      resultMode: resultMode,
-    ));
+          commandText,
+          parameters: parameters,
+          statementName: statementName,
+          rewriteParameters: rewriteParameters,
+          resultMode: resultMode,
+        ));
   }
 
   Future<List<PgRow>> executePgRows(
@@ -441,11 +441,11 @@ class DpgsqlConnection {
       throw StateError('Connection closed');
     }
     return _exclusive(() => _connector!.executePgRows(
-      commandText,
-      parameters: parameters,
-      statementName: statementName,
-      rewriteParameters: rewriteParameters,
-    ));
+          commandText,
+          parameters: parameters,
+          statementName: statementName,
+          rewriteParameters: rewriteParameters,
+        ));
   }
 
   Future<void> forEachPgRow(
@@ -459,12 +459,12 @@ class DpgsqlConnection {
       throw StateError('Connection closed');
     }
     return _exclusive(() => _connector!.forEachPgRow(
-      commandText,
-      action,
-      parameters: parameters,
-      statementName: statementName,
-      rewriteParameters: rewriteParameters,
-    ));
+          commandText,
+          action,
+          parameters: parameters,
+          statementName: statementName,
+          rewriteParameters: rewriteParameters,
+        ));
   }
 
   Future<void> forEachPgRowSync(
@@ -478,12 +478,12 @@ class DpgsqlConnection {
       throw StateError('Connection closed');
     }
     return _exclusive(() => _connector!.forEachPgRowSync(
-      commandText,
-      action,
-      parameters: parameters,
-      statementName: statementName,
-      rewriteParameters: rewriteParameters,
-    ));
+          commandText,
+          action,
+          parameters: parameters,
+          statementName: statementName,
+          rewriteParameters: rewriteParameters,
+        ));
   }
 
   Future<void> prepare(String commandText, String statementName,

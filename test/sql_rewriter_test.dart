@@ -18,8 +18,7 @@ String _rewrite(String sql, int params) =>
 
 void main() {
   test('an apostrophe in a line comment does not open a string', () {
-    expect(
-        _rewrite("select ? -- the type's default ?\n, ? as b", 2),
+    expect(_rewrite("select ? -- the type's default ?\n, ? as b", 2),
         "select \$1 -- the type's default ?\n, \$2 as b");
   });
 

@@ -184,8 +184,14 @@ class TimezoneHelper {
   }) {
     final fast = _parseIsoFields(value);
     if (fast != null && fast.offsetSeconds != null) {
-      final utc = DateTime.utc(fast.year, fast.month, fast.day, fast.hour,
-              fast.minute, fast.second, fast.microsecond ~/ 1000,
+      final utc = DateTime.utc(
+              fast.year,
+              fast.month,
+              fast.day,
+              fast.hour,
+              fast.minute,
+              fast.second,
+              fast.microsecond ~/ 1000,
               fast.microsecond % 1000)
           .subtract(Duration(seconds: fast.offsetSeconds!));
       if (timeZone.forceDecodeTimestamptzAsUTC) return utc;
