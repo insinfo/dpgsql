@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.2
+
+- fix: `SSL Mode=VerifyCA` and `VerifyFull` went on in plain text when the
+  server answered that it does not support SSL (only `Require` failed), and
+  accepted any certificate because `Trust Server Certificate` is true by
+  default. They now fail when the server refuses SSL and always verify the
+  certificate; `Trust Server Certificate` applies to `Allow`, `Prefer` and
+  `Require` only, as in libpq and Npgsql
+
 ## 1.1.1
 
 - fix: the session settings (`Search Path`, `Application Name`, `Statement
