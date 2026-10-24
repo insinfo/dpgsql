@@ -80,6 +80,10 @@ class DpgsqlConnector {
   final String database;
   final SslMode sslMode;
   final bool trustServerCertificate;
+
+  /// Whether [sslMode] requires a verified server certificate.
+  bool get _verifiesCertificate =>
+      sslMode == SslMode.verifyCa || sslMode == SslMode.verifyFull;
   final Encoding encoding;
   final String? clientEncoding;
   final TimeZoneSettings timeZone;
@@ -292,29 +296,18 @@ class DpgsqlConnector {
           // Upgrade to SSL
           _socket = await SecureSocket.secure(
             _socket!,
-            onBadCertificate: (cert) {
-              // If TrustServerCertificate is true, we always trust.
-              if (trustServerCertificate) return true;
-
-              // If SslMode is VerifyCA or VerifyFull, we expect strict validation.
-              // SecureSocket by default validates against system CAs.
-              // If we are here, validation FAILED.
-
-              // If SslMode is Allow or Prefer, we might be lenient?
-              // Dpgsql docs: "Prefer: ... If SSL is used, the server certificate is validated."
-              // So if validation fails, we should reject, unless TrustServerCertificate is true.
-
-              // However, historically 'Allow' might have been loose.
-              // But standard Dpgsql behavior is: if SSL is negotiated, validation happens unless TrustServerCertificate=true.
-
-              return false;
-            },
+            // Called when the certificate failed the system CA (and host
+            // name) validation. VerifyCA and VerifyFull exist to verify it:
+            // Trust Server Certificate (true by default in the connection
+            // string) applies only to the other modes, as in libpq/Npgsql.
+            onBadCertificate: (cert) =>
+                !_verifiesCertificate && trustServerCertificate,
           );
           // Update inputStream to the new SecureSocket
           inputStream = _socket!;
         } else if (response == 78) {
-          // 'N'
-          if (sslMode == SslMode.require) {
+          // 'N': only Allow and Prefer may go on in plain text.
+          if (sslMode == SslMode.require || _verifiesCertificate) {
             throw PostgresException(
               severity: 'FATAL',
               invariantSeverity: 'FATAL',

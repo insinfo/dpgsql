@@ -339,6 +339,10 @@ class DpgsqlConnectionStringBuilder {
     }
   }
 
+  /// Whether a server certificate that fails validation is accepted
+  /// (`Trust Server Certificate`, true by default). It applies to SSL Mode
+  /// Allow, Prefer and Require; VerifyCA and VerifyFull always verify the
+  /// certificate, whatever this is.
   bool get trustServerCertificate {
     return _getBool(
       true,
