@@ -686,7 +686,7 @@ class DpgsqlConnector {
 
   void _processPipelineMessage(IBackendMessage msg) {
     if (msg is ReadyForQueryMessage) {
-      _handleReadyForQueryMessage();
+      _handleReadyForQueryMessage(msg.transactionStatusIndicator.indicator);
     }
 
     if (_pipelineQueue == null || !_pipelineQueue!.inPipelineMode) {
@@ -750,7 +750,13 @@ class DpgsqlConnector {
     }
   }
 
-  void _handleReadyForQueryMessage() {
+  /// The transaction status of the last ReadyForQuery: whether the session
+  /// is idle, in a transaction, or in a transaction an error aborted.
+  TransactionStatus transactionStatus = TransactionStatus.idle;
+
+  void _handleReadyForQueryMessage(int transactionStatusIndicator) {
+    transactionStatus =
+        TransactionStatus.fromIndicator(transactionStatusIndicator);
     final shouldExit =
         _autoExitPipelineOnReady || _pipelinePendingError != null;
     if (!shouldExit) {
@@ -1544,7 +1550,7 @@ class DpgsqlConnector {
       while (true) {
         final raw = await nextRawMessage();
         if (raw.typeCode == 0x5A) {
-          _handleReadyForQueryMessage();
+          _handleReadyForQueryMessage(raw.payload[0]);
           break;
         }
         if (raw.typeCode == 0x41 ||
@@ -1574,7 +1580,7 @@ class DpgsqlConnector {
           }
           continue;
         case 0x5A: // ReadyForQuery
-          _handleReadyForQueryMessage();
+          _handleReadyForQueryMessage(raw.payload[0]);
           keepRest();
           return rows;
         case 0x43: // CommandComplete

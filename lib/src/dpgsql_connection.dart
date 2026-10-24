@@ -39,6 +39,13 @@ class DpgsqlConnection {
   ConnectionState get state => _state;
   bool get hasActiveReader => _activeReaderCount > 0;
   bool get hasActiveTransaction => _activeTransaction;
+
+  /// The transaction status the server reported after the last command:
+  /// [TransactionStatus.inFailedTransactionBlock] once an error aborted the
+  /// transaction (every command fails until a ROLLBACK TO SAVEPOINT, and a
+  /// COMMIT only rolls back).
+  TransactionStatus get transactionStatus =>
+      _connector?.transactionStatus ?? TransactionStatus.idle;
   bool get hasActiveCopyOperation => _activeCopyOperation;
   bool get isSafeToReturnToPool =>
       !_discardConnectorOnClose &&

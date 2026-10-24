@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.1.3
+
+- fix: `DpgsqlTransaction.commit` (and so `runInTransaction`) of a
+  transaction an error aborted completed without an error: PostgreSQL
+  answers that COMMIT with a ROLLBACK, so a caller that caught the error
+  took the rolled back writes for saved. It now rolls back and throws a
+  `PostgresException` with SQLSTATE `25P02`; after a `ROLLBACK TO SAVEPOINT`
+  the transaction commits as before
+- `DpgsqlConnection.transactionStatus`: the transaction status the server
+  reported after the last command
+
 ## 1.1.2
 
 - fix: `SSL Mode=VerifyCA` and `VerifyFull` went on in plain text when the

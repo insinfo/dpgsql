@@ -2,6 +2,8 @@
 /// Porting DpgsqlTransaction.cs
 import 'dpgsql_connection.dart';
 import 'isolation_level.dart';
+import 'postgres_exception.dart';
+import 'protocol/backend_messages.dart';
 
 class DpgsqlTransaction {
   DpgsqlTransaction(this._connection, this.isolationLevel,
@@ -20,8 +22,24 @@ class DpgsqlTransaction {
   bool get isCompleted => _isCompleted;
 
   /// Commits the database transaction.
+  ///
+  /// Throws a [PostgresException] (SQLSTATE 25P02) when an error aborted the
+  /// transaction and no ROLLBACK TO SAVEPOINT recovered from it: the server
+  /// would answer the COMMIT with a ROLLBACK, not with an error, so the
+  /// caller would take the rolled back writes for saved. It is rolled back.
   Future<void> commit() async {
     _checkCompleted();
+    if (_connection.transactionStatus ==
+        TransactionStatus.inFailedTransactionBlock) {
+      await rollback();
+      throw PostgresException(
+        severity: 'ERROR',
+        invariantSeverity: 'ERROR',
+        sqlState: '25P02',
+        messageText: 'The transaction was aborted by an earlier error and '
+            'was rolled back instead of committed.',
+      );
+    }
     final reader = await _connection.executeReader('COMMIT');
     await reader.close();
     _complete();
