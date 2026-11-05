@@ -629,18 +629,27 @@ class DpgsqlConnector {
   /// reader.
   void drainAsyncMessages() {
     if (!_isConnected || _msgReader == null || inPipelineMode) return;
-    while (_bufferedBackendMessages.isNotEmpty) {
-      if (!_dispatchAsyncMessage(_bufferedBackendMessages.first)) return;
-      _bufferedBackendMessages.removeFirst();
-    }
-    while (true) {
-      final raw = _msgReader!.tryReadMessage();
-      if (raw == null) return;
-      final msg = _backendReader.parse(raw);
-      if (!_dispatchAsyncMessage(msg)) {
-        _bufferedBackendMessages.add(msg);
-        return;
+    try {
+      while (_bufferedBackendMessages.isNotEmpty) {
+        if (!_dispatchAsyncMessage(_bufferedBackendMessages.first)) return;
+        _bufferedBackendMessages.removeFirst();
       }
+      while (true) {
+        final raw = _msgReader!.tryReadMessage();
+        if (raw == null) return;
+        final msg = _backendReader.parse(raw);
+        if (!_dispatchAsyncMessage(msg)) {
+          _bufferedBackendMessages.add(msg);
+          return;
+        }
+      }
+    } catch (_) {
+      // This runs in a microtask, with no caller to receive the error: it
+      // would be an uncaught error, which ends the process. The stream cannot
+      // be trusted after bytes it cannot read, so the connection is lost.
+      _isConnected = false;
+      _socket?.destroy();
+      onConnectionLost?.call();
     }
   }
 

@@ -12,6 +12,10 @@
   TLS handshake or the authentication, or an unreachable host, left it waiting
   forever. `Timeout` (15 s by default) now bounds the TCP connection, the TLS handshake and the authentication, with a
   `TimeoutException`; zero means no limit
+- fix: bytes the driver could not read arriving on an idle connection (between
+  commands, where notifications are read) became an uncaught error, which ends
+  the process by default. The connection is now closed and `onConnectionLost`
+  fires. Found by mutating captured server replies
 
 ## 1.2.0
 
