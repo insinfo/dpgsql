@@ -474,6 +474,8 @@ final conn = DpgsqlConnection(
 
 Settings that cannot be honored throw `ArgumentError` when the connection opens, instead of connecting with less security.
 
+The password is sent in clear text only with `VerifyCA` or `VerifyFull`, or with `Allow Cleartext Password=true`, for a server that authenticates with LDAP, PAM or `password`. `Timeout` (15 s by default) bounds the TCP connection, the TLS handshake and the authentication; zero means no limit.
+
 ## Continuous Integration
 
 The GitHub Actions workflow `Dart Testing` runs on pushes and pull requests to `main`, across PostgreSQL 14, 15, 16, and 17. It installs Dart, analyzes the project, configures a real PostgreSQL service container, and runs the full test suite with real database coverage.

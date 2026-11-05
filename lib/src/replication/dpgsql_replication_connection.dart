@@ -31,6 +31,8 @@ class DpgsqlReplicationConnection {
       sslMode: builder.sslMode,
       trustServerCertificate: builder.trustServerCertificate,
       securityContext: builder.resolveSecurityContext(),
+      connectTimeout: builder.timeout,
+      allowCleartextPassword: builder.allowCleartextPassword,
       encoding: builder.encoding,
       clientEncoding: builder.postgresClientEncoding,
       timeZone: builder.timeZone,

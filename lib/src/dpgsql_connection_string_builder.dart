@@ -355,6 +355,16 @@ class DpgsqlConnectionStringBuilder {
     _parameters['Trust Server Certificate'] = value.toString();
   }
 
+  /// Whether the password may be sent in clear text when the server asks for
+  /// it with no verified TLS (`Allow Cleartext Password`, false by default).
+  /// Whoever asks gets the password itself, so without VerifyCA or VerifyFull
+  /// that may be anyone between the client and the server. Servers that
+  /// authenticate with LDAP, PAM or `password` ask for it.
+  bool get allowCleartextPassword =>
+      _getBool(false, 'Allow Cleartext Password', 'AllowCleartextPassword');
+  set allowCleartextPassword(bool value) =>
+      _parameters['Allow Cleartext Password'] = value.toString();
+
   /// PEM file with the CA certificates that verify the server
   /// (`Root Certificate`). Only these are trusted, not the system roots. It
   /// requires SSL Mode VerifyCA or VerifyFull: in the other modes nothing
@@ -461,7 +471,9 @@ class DpgsqlConnectionStringBuilder {
   set maxPoolSize(int value) =>
       _parameters['Maximum Pool Size'] = value.toString();
 
-  /// Time to wait for a free connection when the pool is exhausted.
+  /// Time to open a connection (TCP, TLS and authentication) and to wait for a
+  /// free connection when the pool is exhausted. Opening a connection has no
+  /// limit with zero.
   Duration get timeout => Duration(
         seconds: _getInt(15, 'Timeout', 'Connection Timeout'),
       );

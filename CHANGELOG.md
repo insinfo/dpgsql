@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0
+
+- security, breaking: the password is no longer sent in clear text when the
+  server asks for it with no verified TLS: whoever asks gets the password
+  itself, so with `SSL Mode=Require` or without TLS that could be anyone between
+  the client and the server. `open()` fails with a `DpgsqlException`. Servers
+  that authenticate with LDAP, PAM or `password`: use `SSL Mode=VerifyFull`, or
+  set `Allow Cleartext Password=true`
+- fix: `open()` had no time limit: a server that stopped answering during the
+  TLS handshake or the authentication, or an unreachable host, left it waiting
+  forever. `Timeout` (15 s by default) now bounds the TCP connection, the TLS handshake and the authentication, with a
+  `TimeoutException`; zero means no limit
+
 ## 1.2.0
 
 - feat: `Root Certificate`, `SSL Certificate`, `SSL Key` and `SSL Password` in

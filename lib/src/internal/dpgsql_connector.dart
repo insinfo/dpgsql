@@ -29,6 +29,7 @@ import 'pipeline_command_queue.dart';
 import 'pending_command.dart';
 import 'prepared_statement.dart';
 import '../dpgsql_notification_event_args.dart';
+import '../dpgsql_exception.dart';
 import '../ssl_mode.dart';
 import '../timezone_settings.dart';
 import 'timezone_helper.dart';
@@ -45,6 +46,8 @@ class DpgsqlConnector {
     this.sslMode = SslMode.disable,
     this.trustServerCertificate = false,
     this.securityContext,
+    this.connectTimeout = const Duration(seconds: 15),
+    this.allowCleartextPassword = false,
     this.encoding = utf8,
     this.clientEncoding,
     TimeZoneSettings? timeZone,
@@ -85,6 +88,13 @@ class DpgsqlConnector {
   /// The trusted CAs and the client certificate of the TLS handshake; null
   /// uses the system roots.
   final SecurityContext? securityContext;
+
+  /// Bounds [open]: the TCP connection, the TLS handshake and the
+  /// authentication. Zero means no limit.
+  final Duration connectTimeout;
+
+  /// Whether the password may be sent in clear text with no verified TLS.
+  final bool allowCleartextPassword;
 
   /// Whether [sslMode] requires a verified server certificate.
   bool get _verifiesCertificate =>
@@ -261,9 +271,32 @@ class DpgsqlConnector {
   Future<void> open() async {
     if (_isConnected) return;
 
+    // A limit of zero waits as long as the network does, as in Npgsql.
+    final bounded = connectTimeout > Duration.zero;
+    final opening = _connectAndStartup(bounded ? connectTimeout : null);
     try {
+      await (bounded ? opening.timeout(connectTimeout) : opening);
+      _isConnected = true;
+    } catch (e) {
+      _openAbandoned = true;
+      await close();
+      rethrow;
+    }
+  }
+
+  /// [open] gave up: what is still running must not go on with a new socket.
+  bool _openAbandoned = false;
+
+  Future<void> _connectAndStartup(Duration? socketTimeout) async {
+    {
       // 1. Connect to Socket
-      _socket = await Socket.connect(host, port);
+      final connected =
+          await Socket.connect(host, port, timeout: socketTimeout);
+      if (_openAbandoned) {
+        connected.destroy();
+        throw StateError('The connection attempt was abandoned');
+      }
+      _socket = connected;
       _socket!.setOption(SocketOption.tcpNoDelay, true);
 
       Stream<List<int>> inputStream = _socket!;
@@ -299,7 +332,7 @@ class DpgsqlConnector {
         if (response == 83) {
           // 'S'
           // Upgrade to SSL
-          _socket = await SecureSocket.secure(
+          final secure = await SecureSocket.secure(
             _socket!,
             context: securityContext,
             // Called when the certificate failed the system CA (and host
@@ -309,6 +342,11 @@ class DpgsqlConnector {
             onBadCertificate: (cert) =>
                 !_verifiesCertificate && trustServerCertificate,
           );
+          if (_openAbandoned) {
+            secure.destroy();
+            throw StateError('The connection attempt was abandoned');
+          }
+          _socket = secure;
           // Update inputStream to the new SecureSocket
           inputStream = _socket!;
         } else if (response == 78) {
@@ -357,11 +395,6 @@ class DpgsqlConnector {
 
       // 3. Start Handshake
       await _handleStartup();
-
-      _isConnected = true;
-    } catch (e) {
-      await close();
-      rethrow;
     }
   }
 
@@ -502,6 +535,14 @@ class DpgsqlConnector {
     }
 
     if (msg is AuthenticationCleartextPasswordMessage) {
+      // Whoever asks for it gets the password itself: with no verified TLS
+      // that may be anyone between the client and the server.
+      if (!allowCleartextPassword && !_verifiesCertificate) {
+        throw DpgsqlException(
+            'The server asked for the password in clear text, and it was not '
+            'sent. Use SSL Mode=VerifyFull, or set Allow Cleartext '
+            'Password=true if the server requires it (LDAP, PAM, password).');
+      }
       await _frontendMessages!.writePassword(password);
       return;
     }

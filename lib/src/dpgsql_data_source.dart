@@ -516,6 +516,8 @@ class DpgsqlDataSource {
       sslMode: _builder.sslMode,
       trustServerCertificate: _builder.trustServerCertificate,
       securityContext: _builder.resolveSecurityContext(),
+      connectTimeout: _builder.timeout,
+      allowCleartextPassword: _builder.allowCleartextPassword,
       encoding: _builder.encoding,
       clientEncoding: _builder.postgresClientEncoding,
       timeZone: _builder.timeZone,
