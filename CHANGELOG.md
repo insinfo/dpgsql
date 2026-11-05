@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.1
+
+- fix: a write to a socket the server reset (a restart, a proxy, a network failure) became an uncaught error, which ends the process by default, although the call itself failed: the error goes to the socket's `done` future, and nobody listened to it
+
 ## 1.3.0
 
 - security, breaking: the password is no longer sent in clear text when the

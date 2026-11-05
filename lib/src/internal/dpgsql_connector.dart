@@ -296,6 +296,7 @@ class DpgsqlConnector {
         connected.destroy();
         throw StateError('The connection attempt was abandoned');
       }
+      _observeDone(connected);
       _socket = connected;
       _socket!.setOption(SocketOption.tcpNoDelay, true);
 
@@ -346,6 +347,7 @@ class DpgsqlConnector {
             secure.destroy();
             throw StateError('The connection attempt was abandoned');
           }
+          _observeDone(secure);
           _socket = secure;
           // Update inputStream to the new SecureSocket
           inputStream = _socket!;
@@ -430,6 +432,7 @@ class DpgsqlConnector {
     Socket? socket;
     try {
       socket = await Socket.connect(host, port);
+      _observeDone(socket);
       final buffer = SocketBinaryOutput(socket);
       final writer = PostgresMessageWriter(buffer);
       final frontend = FrontendMessages(writer);
@@ -2684,4 +2687,11 @@ final class _PreparedMapMetadata {
   final List<String> columnNames;
   final List<int> oids;
   final List<TypeHandler?> handlers;
+}
+
+/// Errors of a write to a socket the server reset go to its `done` future; with
+/// nobody listening they are uncaught errors, which end a process by default.
+/// The command already fails through the read side of the socket.
+void _observeDone(Socket socket) {
+  socket.done.then<void>((_) {}, onError: (Object _) {});
 }
