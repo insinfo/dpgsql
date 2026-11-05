@@ -170,6 +170,7 @@ class DpgsqlConnection {
         database: builder.database,
         sslMode: builder.sslMode,
         trustServerCertificate: builder.trustServerCertificate,
+        securityContext: builder.resolveSecurityContext(),
         encoding: builder.encoding,
         clientEncoding: builder.postgresClientEncoding,
         timeZone: builder.timeZone,

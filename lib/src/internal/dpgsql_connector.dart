@@ -44,6 +44,7 @@ class DpgsqlConnector {
     this.database = 'postgres',
     this.sslMode = SslMode.disable,
     this.trustServerCertificate = false,
+    this.securityContext,
     this.encoding = utf8,
     this.clientEncoding,
     TimeZoneSettings? timeZone,
@@ -80,6 +81,10 @@ class DpgsqlConnector {
   final String database;
   final SslMode sslMode;
   final bool trustServerCertificate;
+
+  /// The trusted CAs and the client certificate of the TLS handshake; null
+  /// uses the system roots.
+  final SecurityContext? securityContext;
 
   /// Whether [sslMode] requires a verified server certificate.
   bool get _verifiesCertificate =>
@@ -296,6 +301,7 @@ class DpgsqlConnector {
           // Upgrade to SSL
           _socket = await SecureSocket.secure(
             _socket!,
+            context: securityContext,
             // Called when the certificate failed the system CA (and host
             // name) validation. VerifyCA and VerifyFull exist to verify it:
             // Trust Server Certificate (true by default in the connection

@@ -355,6 +355,97 @@ class DpgsqlConnectionStringBuilder {
     _parameters['Trust Server Certificate'] = value.toString();
   }
 
+  /// PEM file with the CA certificates that verify the server
+  /// (`Root Certificate`). Only these are trusted, not the system roots. It
+  /// requires SSL Mode VerifyCA or VerifyFull: in the other modes nothing
+  /// would verify the server against it.
+  String? get rootCertificate => _get('Root Certificate', 'RootCertificate');
+  set rootCertificate(String? value) => _setOptional('Root Certificate', value);
+
+  /// PEM or PKCS#12 file with the client certificate chain
+  /// (`SSL Certificate`). Requires [sslKey].
+  String? get sslCertificate => _get('SSL Certificate', 'SslCertificate');
+  set sslCertificate(String? value) => _setOptional('SSL Certificate', value);
+
+  /// PEM or PKCS#12 file with the private key of [sslCertificate] (`SSL Key`).
+  String? get sslKey => _get('SSL Key', 'SslKey');
+  set sslKey(String? value) => _setOptional('SSL Key', value);
+
+  /// Password of [sslKey] (`SSL Password`), when it is encrypted.
+  String? get sslPassword => _get('SSL Password', 'SslPassword');
+  set sslPassword(String? value) => _setOptional('SSL Password', value);
+
+  /// A ready [SecurityContext], for certificates that are not in files
+  /// ([SecurityContext.setTrustedCertificatesBytes]). It is not part of the
+  /// connection string, and replaces [rootCertificate], [sslCertificate],
+  /// [sslKey] and [sslPassword], which cannot be set with it.
+  SecurityContext? securityContext;
+
+  void _setOptional(String keyword, String? value) {
+    if (value == null) {
+      _parameters.remove(keyword);
+    } else {
+      _parameters[keyword] = value;
+    }
+  }
+
+  /// The [SecurityContext] of the TLS settings above; null when there are
+  /// none (the system roots verify the server). Throws [ArgumentError] for
+  /// settings that cannot be honored: a certificate that was not loaded must
+  /// not end in a connection with less security than the one asked for.
+  SecurityContext? resolveSecurityContext() {
+    final root = rootCertificate;
+    final certificate = sslCertificate;
+    final key = sslKey;
+    final password = sslPassword;
+    final hasFiles = root != null || certificate != null || key != null;
+    final context = securityContext;
+    if (context == null && !hasFiles) return null;
+
+    if (context != null && hasFiles) {
+      throw ArgumentError(
+          'securityContext cannot be combined with Root Certificate, '
+          'SSL Certificate or SSL Key');
+    }
+    final mode = sslMode;
+    if (mode == SslMode.disable) {
+      throw ArgumentError(
+          'TLS certificates were given, but SSL Mode is Disable');
+    }
+    if (context != null) return context;
+    if (root != null && mode != SslMode.verifyCa && mode != SslMode.verifyFull) {
+      throw ArgumentError(
+          'Root Certificate requires SSL Mode VerifyCA or VerifyFull: '
+          'SSL Mode $mode would not verify the server against it');
+    }
+    if ((certificate == null) != (key == null)) {
+      throw ArgumentError('SSL Certificate and SSL Key must be given together');
+    }
+
+    // A client certificate alone keeps the system roots for the server.
+    final loaded = SecurityContext(withTrustedRoots: root == null);
+    void load(String keyword, String file, void Function() read) {
+      try {
+        read();
+      } on IOException catch (e) {
+        // FileSystemException and TlsException.
+        throw ArgumentError.value(file, keyword, 'Could not be loaded: $e');
+      }
+    }
+
+    if (root != null) {
+      load('Root Certificate', root, () => loaded.setTrustedCertificates(root));
+    }
+    if (certificate != null && key != null) {
+      load(
+          'SSL Certificate',
+          certificate,
+          () => loaded.useCertificateChain(certificate, password: password));
+      load('SSL Key', key, () => loaded.usePrivateKey(key, password: password));
+    }
+    return loaded;
+  }
+
   /// Whether pooling is enabled. Mirrors Dpgsql's `Pooling` keyword.
   bool get pooling => _getBool(true, 'Pooling');
   set pooling(bool value) => _parameters['Pooling'] = value.toString();
