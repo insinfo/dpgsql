@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0
+
+- feat: `Root Certificate`, `SSL Certificate`, `SSL Key` and `SSL Password` in
+  the connection string, and `DpgsqlConnectionStringBuilder.securityContext`
+  for certificates in memory: a private CA can verify the server with
+  `SSL Mode=VerifyCA` or `VerifyFull` (only the system roots could), and the
+  connection can present a client certificate. Settings that cannot be
+  honored throw `ArgumentError` instead of connecting with less security:
+  `Root Certificate` in a mode that does not verify, any certificate with
+  `SSL Mode=Disable`, a certificate without its key, a file that cannot be
+  loaded
+
 ## 1.1.3
 
 - fix: `DpgsqlTransaction.commit` (and so `runInTransaction`) of a

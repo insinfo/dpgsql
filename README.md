@@ -453,6 +453,27 @@ use:
 dart run scripts/generate_pg_timezone_data.dart --download-iana --scope latest_10y
 ```
 
+## TLS Certificates
+
+`SSL Mode=VerifyCA` and `VerifyFull` verify the server against the system roots. For a private CA, or to present a client certificate:
+
+```dart
+final conn = DpgsqlConnection(
+  'Host=db.example.com; Database=app; Username=app; Password=secret; '
+  'SSL Mode=VerifyFull; '
+  'Root Certificate=/etc/ssl/db/ca.pem; '
+  'SSL Certificate=/etc/ssl/db/client.pem; '
+  'SSL Key=/etc/ssl/db/client.key; '
+  'SSL Password=key-password',
+);
+```
+
+- `Root Certificate` replaces the system roots and requires `VerifyCA` or `VerifyFull`. dart:io verifies the chain and the host name together, so `VerifyCA` is `VerifyFull`.
+- `SSL Certificate` and `SSL Key` go together, in any mode with TLS. `SSL Password` is for an encrypted key.
+- For certificates that are not in files, set `DpgsqlConnectionStringBuilder.securityContext` to a `SecurityContext`, instead of the keywords.
+
+Settings that cannot be honored throw `ArgumentError` when the connection opens, instead of connecting with less security.
+
 ## Continuous Integration
 
 The GitHub Actions workflow `Dart Testing` runs on pushes and pull requests to `main`, across PostgreSQL 14, 15, 16, and 17. It installs Dart, analyzes the project, configures a real PostgreSQL service container, and runs the full test suite with real database coverage.
